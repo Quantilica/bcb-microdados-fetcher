@@ -11,8 +11,7 @@ def test_cli_list() -> None:
     result = runner.invoke(app, ["list"])
     assert result.exit_code == 0
     assert "scr" in result.output
-    assert "estban" in result.output
-    assert "cosif" in result.output
+    assert "15 dataset(s)" in result.output
 
 
 def test_cli_convert_help() -> None:

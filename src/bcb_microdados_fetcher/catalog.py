@@ -1,18 +1,18 @@
-"""Dataset catalog for bcb-microdados-fetcher."""
+"""Dataset catalog for bcb-microdados-fetcher.
+
+Apenas o SCR.data tem URL pública estável. Os endpoints históricos de ESTBAN e
+COSIF (`/estban/<pasta>/...`, `/cosif/<pasta>/...`) passaram a devolver a página
+HTML da SPA do BCB; os grupos foram removidos até que o novo canal seja
+identificado (ver plano `2026-11-02-inclusao-fontes-novembro-crons-fetchers`).
+"""
 
 from __future__ import annotations
 
 import datetime as dt
 from typing import Any
 
-from ._catalog_base import DatasetEntry, GroupInfo, annual_datasets, monthly_datasets
-from .constants import (
-    BCB_BASE_URL,
-    COSIF_SEGMENTOS,
-    ESTBAN_PASTAS,
-    SCR_START_YEAR,
-    SCR_URL_TEMPLATE,
-)
+from ._catalog_base import DatasetEntry, GroupInfo, annual_datasets
+from .constants import SCR_START_YEAR, SCR_URL_TEMPLATE
 
 __all__ = [
     "DatasetEntry",
@@ -37,73 +37,12 @@ def _build_scr_entries() -> list[DatasetEntry]:
     )
 
 
-def _build_estban_entries() -> list[DatasetEntry]:
-    """Build entries for ESTBAN (município e agência)."""
-    current_year = dt.date.today().year
-    entries: list[DatasetEntry] = []
-    for slug, meta in ESTBAN_PASTAS.items():
-        base_id = f"estban_{slug}"
-        pasta = meta["pasta"]
-        prefixo = meta["prefixo"]
-        start_year = meta["start_year"]
-        url_tmpl = f"{BCB_BASE_URL}/estban/{pasta}/{{year}}{{month}}_{prefixo}.csv.zip"
-        name_tmpl = f"{meta['name']} ({{year}}-{{month}})"
-        entries.extend(
-            monthly_datasets(
-                group="estban",
-                base_id=base_id,
-                name_template=name_tmpl,
-                url_template=url_tmpl,
-                start_year=start_year,
-                end_year=current_year,
-                ext="zip",
-                extra={"pasta": pasta, "tipo": slug},
-            )
-        )
-    return entries
-
-
-def _build_cosif_entries() -> list[DatasetEntry]:
-    """Build entries for COSIF (8 segmentos)."""
-    current_year = dt.date.today().year
-    entries: list[DatasetEntry] = []
-    for slug, meta in COSIF_SEGMENTOS.items():
-        base_id = f"cosif_{slug}"
-        pasta = meta["pasta"]
-        sufixo = meta["sufixo"]
-        start_year = meta["start_year"]
-        end_year = meta["end_year"] or current_year
-        url_tmpl = f"{BCB_BASE_URL}/cosif/{pasta}/{{year}}{{month}}{sufixo}.csv.zip"
-        name_tmpl = f"COSIF — {meta['name']} ({{year}}-{{month}})"
-        entries.extend(
-            monthly_datasets(
-                group="cosif",
-                base_id=base_id,
-                name_template=name_tmpl,
-                url_template=url_tmpl,
-                start_year=start_year,
-                end_year=end_year,
-                ext="zip",
-                extra={"pasta": pasta, "segmento": slug, "sufixo": sufixo},
-            )
-        )
-    return entries
-
-
 def _build_all_groups() -> dict[str, GroupInfo]:
     """Assemble all dataset groups."""
     return {
         "scr": GroupInfo(
             name="SCR.data — Carteira de Crédito Agregada",
             entries=_build_scr_entries(),
-        ),
-        "estban": GroupInfo(
-            name="ESTBAN — Estatística Bancária Mensal",
-            entries=_build_estban_entries(),
-        ),
-        "cosif": GroupInfo(
-            name="COSIF — Balancetes e Balanços Patrimoniais",
-            entries=_build_cosif_entries(),
         ),
     }
 
@@ -118,10 +57,6 @@ GROUP_ALIASES: dict[str, str] = {
     "padrao": "scr",
     "credito": "scr",
     "scr_data": "scr",
-    "estatistica_bancaria": "estban",
-    "bancos": "cosif",
-    "balancetes": "cosif",
-    "balancos": "cosif",
 }
 
 
