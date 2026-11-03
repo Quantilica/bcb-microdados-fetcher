@@ -7,7 +7,7 @@ from bcb_microdados_fetcher.storage import DataRepository
 
 
 def test_path_for_entry_fallback_timestamp() -> None:
-    """Test that when last_modified=None, the filename gets today's @YYYYMMDD timestamp."""
+    """With last_modified=None the filename gets today's @YYYYMMDD timestamp."""
     repo = DataRepository(Path("/tmp/test"))
     entry = {"base_id": "scr", "ext": "csv", "group": "scr"}
 
