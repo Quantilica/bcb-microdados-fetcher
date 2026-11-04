@@ -189,3 +189,127 @@ def test_convert_cosif_eras_and_plans(tmp_path: Path) -> None:
     df_2025 = pl.read_parquet(part_2025)
     assert df_2025["plano"][0] == "cosif_2025"
     assert df_2025["conta"][0] == "1000000009"
+
+
+# --- Regressao A1: ZIP multi-membro, streaming e encoding estrito ---------------
+
+
+def _rows(ds: Path) -> pl.DataFrame:
+    return pl.concat(
+        [pl.read_parquet(p) for p in sorted(ds.rglob("*.parquet"))], how="diagonal"
+    )
+
+
+def _scr_csv(mes: int, n: int = 2, extra: str = "") -> bytes:
+    head = "data_base;uf;numero_de_operacoes;carteira_ativa\n"
+    body = "".join(f"2024-{mes:02d}-01;SP{extra};{i + 1};10,00\n" for i in range(n))
+    return (head + body).encode("utf-8-sig")
+
+
+def test_scr_zip_tres_membros_preserva_todas_as_linhas(tmp_path: Path) -> None:
+    raw = tmp_path / "raw" / "scr"
+    raw.mkdir(parents=True)
+    with zipfile.ZipFile(raw / "scrdata_2024@20261101.zip", "w") as zf:
+        for mes in (1, 2, 3):
+            zf.writestr(f"scrdata_2024{mes:02d}.csv", _scr_csv(mes))
+    lake = tmp_path / "lake"
+    lake.mkdir()
+    res = converter.convert(tmp_path / "raw", lake)
+    assert not res.errors
+    assert (res.converted, res.skipped) == (3, 0)
+    ds = lake / "bcb-microdados" / "scr"
+    assert not check_dataset(ds)
+    assert _rows(ds).height == 6
+    res2 = converter.convert(tmp_path / "raw", lake)
+    assert (res2.converted, res2.skipped) == (0, 3)
+    assert _rows(ds).height == 6
+
+
+def test_scr_membros_na_mesma_particao_nao_se_pulam(tmp_path: Path) -> None:
+    """Dois membros do mesmo ano/mes (mesma particao) precisam coexistir."""
+    raw = tmp_path / "raw" / "scr"
+    raw.mkdir(parents=True)
+    with zipfile.ZipFile(raw / "scrdata_2024@20261101.zip", "w") as zf:
+        zf.writestr("parte_a.csv", _scr_csv(1, 2, "a"))
+        zf.writestr("parte_b.csv", _scr_csv(1, 3, "b"))
+        zf.writestr("parte_c.csv", _scr_csv(1, 4, "c"))
+    lake = tmp_path / "lake"
+    lake.mkdir()
+    res = converter.convert(tmp_path / "raw", lake)
+    assert not res.errors
+    assert res.converted == 3
+    assert _rows(lake / "bcb-microdados" / "scr").height == 9
+
+
+def test_estban_zip_tres_membros(tmp_path: Path) -> None:
+    raw = tmp_path / "raw" / "estban"
+    raw.mkdir(parents=True)
+    with zipfile.ZipFile(raw / "2024_ESTBAN@20261101.zip", "w") as zf:
+        for mes in (1, 2, 3):
+            csv = (
+                "ESTBAN\nData: x\n"
+                "#DATA_BASE;CNPJ;NOME_INSTITUICAO;CODMUN;MUNICIPIO;UF;CODMUN_IBGE;"
+                "VERBETE_110_DISPONIBILIDADES\n"
+                f"2024{mes:02d};1;BANCO S\xc3O;7388;SAO PAULO;SP;3550308;{mes}\n"
+            )
+            zf.writestr(f"2024{mes:02d}_ESTBAN.csv", csv.encode("latin-1"))
+    lake = tmp_path / "lake"
+    lake.mkdir()
+    res = converter.convert(tmp_path / "raw", lake)
+    assert not res.errors
+    assert res.converted == 3
+    df = _rows(lake / "bcb-microdados" / "estban_municipio")
+    assert sorted(df["valor"].to_list()) == [1, 2, 3]
+    assert "BANCO S\xc3O" in df["nome_instituicao"].to_list()
+
+
+def test_cosif_zip_tres_membros_mesma_particao(tmp_path: Path) -> None:
+    raw = tmp_path / "raw" / "cosif"
+    raw.mkdir(parents=True)
+    with zipfile.ZipFile(raw / "2024BANCOS@20261101.zip", "w") as zf:
+        for i in (1, 2, 3):
+            csv = (
+                "Balancete\nx\ny\n"
+                "#DATA_BASE;DOCUMENTO;CNPJ;AGENCIA;NOME_INSTITUICAO;COD_CONGL;"
+                "NOME_CONGL;TAXONOMIA;CONTA;NOME_CONTA;SALDO\n"
+                f"202412;4010;{i};0001;BANCO A\xc7\xc3O;0;N;0;1111222{i};CAIXA;1,50\n"
+            )
+            zf.writestr(f"202412BANCOS_{i}.csv", csv.encode("cp1252"))
+    lake = tmp_path / "lake"
+    lake.mkdir()
+    res = converter.convert(tmp_path / "raw", lake)
+    assert not res.errors
+    assert res.converted == 3
+    df = _rows(lake / "bcb-microdados" / "cosif")
+    assert df.height == 3
+    assert "BANCO A\xc7\xc3O" in df["nome_instituicao"].to_list()
+
+
+def test_scr_byte_invalido_vira_erro_e_nao_substitui(tmp_path: Path) -> None:
+    raw = tmp_path / "raw" / "scr"
+    raw.mkdir(parents=True)
+    ruim = b"data_base;uf;numero_de_operacoes\n2024-02-01;S\xc3;1\n"
+    with zipfile.ZipFile(raw / "scrdata_2024@20261101.zip", "w") as zf:
+        zf.writestr("scrdata_202401.csv", _scr_csv(1))
+        zf.writestr("scrdata_202402.csv", ruim)
+    lake = tmp_path / "lake"
+    lake.mkdir()
+    res = converter.convert(tmp_path / "raw", lake)
+    assert res.converted == 1
+    assert len(res.errors) == 1 and "202402" in res.errors[0]
+    assert "�" not in "".join(_rows(lake / "bcb-microdados" / "scr")["uf"].to_list())
+
+
+def test_leitura_nao_carrega_o_membro_inteiro(tmp_path: Path, monkeypatch) -> None:
+    def _proibido(self, *args, **kwargs):
+        raise AssertionError("ZipFile.read carrega o membro inteiro na memoria")
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", _proibido)
+    raw = tmp_path / "raw" / "scr"
+    raw.mkdir(parents=True)
+    with zipfile.ZipFile(raw / "scrdata_2024@20261101.zip", "w") as zf:
+        zf.writestr("scrdata_202401.csv", _scr_csv(1))
+    lake = tmp_path / "lake"
+    lake.mkdir()
+    res = converter.convert(tmp_path / "raw", lake)
+    assert not res.errors and res.converted == 1

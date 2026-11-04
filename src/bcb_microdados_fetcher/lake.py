@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-import io
+import codecs
+import logging
+import os
 import re
+import tempfile
 import unicodedata
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +19,7 @@ try:
     from quantilica.analytics.lake import ConvertResult, LakeWriter
     from quantilica.core.lake import (
         DatasetDescriptor,
+        composite_file_key,
         partition_types_for,
         select_current,
     )
@@ -38,36 +43,151 @@ def _norm_col(col_name: str) -> str:
     return re.sub(r"[^a-z0-9+]+", "_", s.lower()).strip("_")
 
 
-def _read_csv_members(path: Path) -> list[tuple[str, bytes]]:
-    """Return list of (member_name, bytes) for CSVs in file (or ZIP archive)."""
-    suffix = path.suffix.lower()
-    # Check if file has PK header (ZIP signature)
-    try:
-        with open(path, "rb") as f:
-            header = f.read(4)
-        if header.startswith(b"PK"):
-            results = []
-            with zipfile.ZipFile(path) as zf:
-                for name in zf.namelist():
-                    if name.lower().endswith(".csv") or ".csv" in name.lower():
-                        results.append((name, zf.read(name)))
-            return results
-    except Exception:
-        pass
+logger = logging.getLogger(__name__)
 
-    if suffix in (".csv", ".txt") or path.name.lower().endswith((".csv", ".txt")):
-        return [(path.name, path.read_bytes())]
+# Encoding declarado por dataset (igual em todos os membros do ZIP). Decodificacao
+# estrita: byte invalido vira erro contado do membro, nunca U+FFFD.
+ENCODINGS = {
+    "scr": "utf-8",
+    "estban_municipio": "latin-1",
+    "estban_agencia": "latin-1",
+    "cosif": "cp1252",
+}
+_CHUNK = 1 << 20
+
+
+def _c1_passthrough(exc: UnicodeDecodeError) -> tuple[str, int]:
+    """Bytes que o cp1252 deixa indefinidos (0x81, 0x8D, 0x8F, 0x90, 0x9D) viram o
+    caractere C1 de mesmo codigo (mapeamento latin-1): sem perda e sem U+FFFD."""
+    if exc.encoding.lower().replace("-", "").replace("_", "") != "cp1252":
+        raise exc
+    return "".join(chr(b) for b in exc.object[exc.start : exc.end]), exc.end
+
+
+codecs.register_error("quantilica_c1", _c1_passthrough)
+
+
+def _transcode_to_utf8(source, dest: Path, encoding: str) -> None:
+    """Copia ``source`` (binario) para ``dest`` em UTF-8, em blocos, estrito."""
+    enc = encoding.lower()
+    errors = "quantilica_c1" if enc in ("cp1252", "windows-1252") else "strict"
+    codec = "utf-8-sig" if enc in ("utf-8", "utf8") else encoding
+    decoder = codecs.getincrementaldecoder(codec)(errors=errors)
+    with open(dest, "w", encoding="utf-8", newline="") as out:
+        while chunk := source.read(_CHUNK):
+            out.write(decoder.decode(chunk))
+        out.write(decoder.decode(b"", final=True))
+
+
+def _csv_member_names(path: Path) -> list[str] | None:
+    """Nomes dos CSVs do ZIP; ``None`` quando ``path`` nao e um ZIP."""
+    with open(path, "rb") as f:
+        if not f.read(4).startswith(b"PK"):
+            return None
+    with zipfile.ZipFile(path) as zf:
+        return [
+            i.filename
+            for i in zf.infolist()
+            if not i.is_dir() and ".csv" in i.filename.lower()
+        ]
+
+
+@contextmanager
+def _member_as_utf8(path: Path, name: str | None, encoding: str) -> Iterator[Path]:
+    """CSV de um membro (ou do proprio arquivo) em UTF-8 num temporario (streaming)."""
+    with tempfile.TemporaryDirectory(
+        dir=os.environ.get("QUANTILICA_LAKE_SCRATCH") or None
+    ) as tmp:
+        dest = Path(tmp) / "membro.csv"
+        if name is None:
+            with open(path, "rb") as fh:
+                _transcode_to_utf8(fh, dest, encoding)
+        else:
+            with zipfile.ZipFile(path) as zf, zf.open(name) as fh:
+                _transcode_to_utf8(fh, dest, encoding)
+        yield dest
+
+
+def _iter_members(raw_file: Path) -> list[str | None]:
+    """Membros: nomes do ZIP, ``[None]`` para CSV solto, ``[]`` se ignorado."""
+    names = _csv_member_names(raw_file)
+    if names is not None:
+        return list(names)
+    if raw_file.suffix.lower() in (".csv", ".txt"):
+        return [None]
     return []
 
 
-def _skip_preamble_lines(text: str, prefixes: tuple[str, ...]) -> str:
-    """Skip preamble lines until a line starting with one of ``prefixes`` is found."""
-    lines = text.splitlines()
-    for idx, line in enumerate(lines[:15]):
-        line_s = line.strip()
-        if any(line_s.startswith(p) for p in prefixes):
-            return "\n".join(lines[idx:])
-    return text
+def _preamble_skip(csv_path: Path, prefixes: tuple[str, ...]) -> int:
+    """Linhas de preambulo antes do cabecalho (prefixos), olhando as 15 primeiras."""
+    with open(csv_path, encoding="utf-8", newline="") as fh:
+        for idx, line in enumerate(fh):
+            if idx >= 15:
+                break
+            if any(line.strip().startswith(p) for p in prefixes):
+                return idx
+    return 0
+
+
+def _scan(
+    csv_path: Path, *, skip_rows: int = 0, decimal_comma: bool = False
+) -> pl.LazyFrame:
+    return pl.scan_csv(
+        csv_path,
+        separator=";",
+        skip_rows=skip_rows,
+        decimal_comma=decimal_comma,
+        infer_schema_length=5000,
+        encoding="utf8",
+    )
+
+
+def _first_value(lf: pl.LazyFrame, col: str) -> Any:
+    return lf.select(pl.col(col).first()).collect().item()
+
+
+def _convert_members(
+    raw_file: Path,
+    writer: LakeWriter,
+    res: ConvertResult,
+    label: str,
+    encoding: str,
+    build,
+) -> None:
+    """Converte cada membro com chave composta zip+membro (sem pular os demais).
+
+    ``build(csv_path, member_name)`` devolve ``(lazyframe, partitions)`` ou ``None``.
+    """
+    try:
+        members = _iter_members(raw_file)
+    except (OSError, zipfile.BadZipFile) as exc:
+        res.errors.append(f"{label} {raw_file.name}: ZIP ilegivel: {exc}")
+        return
+    for name in members:
+        shown = name or raw_file.name
+        key = composite_file_key(raw_file, name).lower()
+        try:
+            with _member_as_utf8(raw_file, name, encoding) as csv_path:
+                built = build(csv_path, shown)
+                if built is None:
+                    continue
+                lf, partitions = built
+                if writer.is_current(
+                    raw_file, partitions=partitions, file_key_name=key
+                ):
+                    res.skipped += 1
+                    continue
+                written = writer.write_polars(
+                    lf, src=raw_file, partitions=partitions, file_key_name=key
+                )
+            if written.status == "skipped":
+                res.skipped += 1
+            else:
+                res.converted += 1
+        except Exception as exc:
+            res.errors.append(
+                f"Erro ao converter {label} {shown} em {raw_file.name}: {exc}"
+            )
 
 
 def _extract_year_month(val: Any) -> tuple[int, int]:
@@ -203,288 +323,242 @@ class BcbMicrodadosLakeConverter:
         self, raw_file: Path, writer: LakeWriter, res: ConvertResult
     ) -> None:
         """Convert SCR.data files (annual ZIP or monthly CSV)."""
-        members = _read_csv_members(raw_file)
-        if not members:
-            return
 
-        for name, data_bytes in members:
-            try:
-                # UTF-8 with BOM
-                text = data_bytes.decode("utf-8-sig", errors="replace")
-                df = pl.read_csv(
-                    io.StringIO(text),
-                    separator=";",
-                    decimal_comma=True,
-                    infer_schema_length=5000,
+        def build(csv_path: Path, name: str):
+            lf = _scan(csv_path, decimal_comma=True)
+            if lf.head(1).collect().height == 0:
+                return None
+            lf = lf.rename({c: _norm_col(c) for c in lf.collect_schema().names()})
+            cols = lf.collect_schema().names()
+
+            if "data_base" in cols:
+                ano, mes = _extract_year_month(_first_value(lf, "data_base"))
+            else:
+                ano, mes = _extract_year_month(name)
+
+            # Statistical secrecy: numero_de_operacoes == -1
+            if "numero_de_operacoes" in cols:
+                lf = lf.with_columns(
+                    pl.col("numero_de_operacoes").cast(pl.Float64, strict=False)
                 )
-                if df.height == 0:
-                    continue
-
-                # Normalize column names
-                df = df.rename({c: _norm_col(c) for c in df.columns})
-
-                # Determine year and month
-                if "data_base" in df.columns:
-                    first_date = df["data_base"][0]
-                    ano, mes = _extract_year_month(first_date)
-                else:
-                    ano, mes = _extract_year_month(name)
-
-                # Statistical secrecy: numero_de_operacoes == -1
-                if "numero_de_operacoes" in df.columns:
-                    # Cast to float or numeric if string
-                    df = df.with_columns(
-                        pl.col("numero_de_operacoes")
-                        .cast(pl.Float64, strict=False)
-                        .alias("numero_de_operacoes")
-                    )
-                    sigilo_expr = pl.col("numero_de_operacoes") == -1
-                    num_ops_expr = (
-                        pl.when(sigilo_expr)
-                        .then(None)
-                        .otherwise(pl.col("numero_de_operacoes"))
-                    )
-                    df = df.with_columns(
-                        sigilo_expr.alias("sigilo"),
-                        num_ops_expr.alias("numero_de_operacoes"),
-                    )
-                else:
-                    df = df.with_columns(pl.lit(False).alias("sigilo"))
-
-                # Add partition columns
-                df = df.with_columns(
-                    pl.lit(ano).cast(pl.Int32).alias("ano"),
-                    pl.lit(mes).cast(pl.Int32).alias("mes"),
+                sigilo_expr = pl.col("numero_de_operacoes") == -1
+                lf = lf.with_columns(
+                    sigilo_expr.alias("sigilo"),
+                    pl.when(sigilo_expr)
+                    .then(None)
+                    .otherwise(pl.col("numero_de_operacoes"))
+                    .alias("numero_de_operacoes"),
                 )
+            else:
+                lf = lf.with_columns(pl.lit(False).alias("sigilo"))
 
-                writer.write_polars(
-                    df, src=raw_file, partitions={"ano": ano, "mes": mes}
-                )
-                res.converted += 1
-            except Exception as exc:
-                res.errors.append(
-                    f"Erro ao converter SCR {name} em {raw_file.name}: {exc}"
-                )
+            lf = lf.with_columns(
+                pl.lit(ano).cast(pl.Int32).alias("ano"),
+                pl.lit(mes).cast(pl.Int32).alias("mes"),
+            )
+            return lf, {"ano": ano, "mes": mes}
+
+        _convert_members(raw_file, writer, res, "SCR", ENCODINGS["scr"], build)
 
     def _convert_estban(
         self, raw_file: Path, writers: dict[str, LakeWriter], res: ConvertResult
     ) -> None:
         """Convert ESTBAN files (município e agência) into long format."""
-        members = _read_csv_members(raw_file)
-        if not members:
+        # municipio x agencia depende das colunas de cada membro; o writer e escolhido
+        # por membro, entao o laco de membros fica aqui.
+        try:
+            members = _iter_members(raw_file)
+        except (OSError, zipfile.BadZipFile) as exc:
+            res.errors.append(f"ESTBAN {raw_file.name}: ZIP ilegivel: {exc}")
             return
 
-        for name, data_bytes in members:
+        for name in members:
+            shown = name or raw_file.name
+            key = composite_file_key(raw_file, name).lower()
             try:
-                # latin-1 or cp1252
-                text = data_bytes.decode("latin-1", errors="replace")
-                cleaned = _skip_preamble_lines(
-                    text, ("#DATA_BASE", "#DATA", "DATA_BASE", "#")
-                )
-
-                df = pl.read_csv(
-                    io.StringIO(cleaned),
-                    separator=";",
-                    infer_schema_length=5000,
-                )
-                if df.height == 0:
-                    continue
-
-                # Clean column names (strip leading # and normalize)
-                col_map = {}
-                for c in df.columns:
-                    c_clean = c.lstrip("#").strip()
-                    col_map[c] = _norm_col(c_clean)
-                df = df.rename(col_map)
-
-                # Determine if agencia or municipio
-                is_agencia = (
-                    "agencia" in df.columns
-                    or "_ag" in name.lower()
-                    or "_ag" in raw_file.name.lower()
-                )
-                target_ds = "estban_agencia" if is_agencia else "estban_municipio"
-
-                if target_ds not in writers:
-                    continue
-
-                writer = writers[target_ds]
-
-                # Strip leading apostrophe from agencia if present
-                if "agencia" in df.columns:
-                    df = df.with_columns(
-                        pl.col("agencia")
-                        .cast(pl.Utf8)
-                        .str.strip_prefix("'")
-                        .alias("agencia")
+                with _member_as_utf8(
+                    raw_file, name, ENCODINGS["estban_municipio"]
+                ) as csv_path:
+                    skip = _preamble_skip(
+                        csv_path, ("#DATA_BASE", "#DATA", "DATA_BASE", "#")
                     )
-
-                # Identify base dimension columns vs verbete columns
-                dim_candidates = {
-                    "data_base",
-                    "cnpj",
-                    "nome_instituicao",
-                    "agencia",
-                    "codmun",
-                    "municipio",
-                    "uf",
-                    "codmun_ibge",
-                }
-                id_cols = [c for c in df.columns if c in dim_candidates]
-                verbete_cols = [c for c in df.columns if c not in dim_candidates]
-
-                # Extract year and month
-                if "data_base" in df.columns:
-                    first_date = df["data_base"][0]
-                    ano, mes = _extract_year_month(first_date)
-                else:
-                    ano, mes = _extract_year_month(name)
-
-                # Reshape to long format
-                if verbete_cols:
-                    # Melt / unpivot
-                    df_long = df.unpivot(
-                        index=id_cols,
-                        on=verbete_cols,
-                        variable_name="verbete_col",
-                        value_name="valor_raw",
+                    lf = _scan(csv_path, skip_rows=skip)
+                    if lf.head(1).collect().height == 0:
+                        continue
+                    lf = lf.rename(
+                        {
+                            c: _norm_col(c.lstrip("#").strip())
+                            for c in lf.collect_schema().names()
+                        }
                     )
+                    cols = lf.collect_schema().names()
 
-                    # Parse verbete_codigo and verbete_nome from verbete_col
-                    # E.g. "verbete_110_disponibilidades" -> ("110", "disponibilidades")
-                    # E.g. "461+467+468_outras" -> ("461+467+468", "outras")
-                    def parse_verbete(col_str: str) -> tuple[str, str]:
-                        m = re.search(
-                            r"(?:verbete_)?(\d{3}(?:\+\d{3})*)(?:_(.*))?", col_str
+                    is_agencia = (
+                        "agencia" in cols
+                        or "_ag" in shown.lower()
+                        or "_ag" in raw_file.name.lower()
+                    )
+                    target_ds = "estban_agencia" if is_agencia else "estban_municipio"
+                    if target_ds not in writers:
+                        continue
+                    writer = writers[target_ds]
+
+                    if "agencia" in cols:
+                        lf = lf.with_columns(
+                            pl.col("agencia")
+                            .cast(pl.Utf8)
+                            .str.strip_prefix("'")
+                            .alias("agencia")
                         )
-                        if m:
-                            return m.group(1), m.group(2) or ""
-                        return col_str, ""
 
-                    codigos: list[str] = []
-                    nomes: list[str] = []
-                    for v_col in df_long["verbete_col"].to_list():
-                        cod, nom = parse_verbete(v_col)
-                        codigos.append(cod)
-                        nomes.append(nom)
+                    dim_candidates = {
+                        "data_base",
+                        "cnpj",
+                        "nome_instituicao",
+                        "agencia",
+                        "codmun",
+                        "municipio",
+                        "uf",
+                        "codmun_ibge",
+                    }
+                    id_cols = [c for c in cols if c in dim_candidates]
+                    verbete_cols = [c for c in cols if c not in dim_candidates]
 
-                    df_final = df_long.with_columns(
-                        pl.Series("verbete_codigo", codigos, dtype=pl.Utf8),
-                        pl.Series("verbete_nome", nomes, dtype=pl.Utf8),
-                        pl.col("valor_raw").cast(pl.Int64, strict=False).alias("valor"),
-                        pl.lit(ano).cast(pl.Int32).alias("ano"),
-                        pl.lit(mes).cast(pl.Int32).alias("mes"),
-                    ).drop(["verbete_col", "valor_raw"])
-                else:
-                    df_final = df.with_columns(
-                        pl.lit("").alias("verbete_codigo"),
-                        pl.lit("").alias("verbete_nome"),
-                        pl.lit(None).cast(pl.Int64).alias("valor"),
-                        pl.lit(ano).cast(pl.Int32).alias("ano"),
-                        pl.lit(mes).cast(pl.Int32).alias("mes"),
+                    if "data_base" in cols:
+                        ano, mes = _extract_year_month(_first_value(lf, "data_base"))
+                    else:
+                        ano, mes = _extract_year_month(shown)
+                    partitions = {"ano": ano, "mes": mes}
+
+                    if verbete_cols:
+                        # "verbete_110_disponibilidades" -> ("110", "disponibilidades")
+                        # "461+467+468_outras" -> ("461+467+468", "outras")
+                        def parse_verbete(col_str: str) -> tuple[str, str]:
+                            m = re.search(
+                                r"(?:verbete_)?(\d{3}(?:\+\d{3})*)(?:_(.*))?", col_str
+                            )
+                            if m:
+                                return m.group(1), m.group(2) or ""
+                            return col_str, ""
+
+                        parsed = {v: parse_verbete(v) for v in verbete_cols}
+                        lf_long = lf.unpivot(
+                            index=id_cols,
+                            on=verbete_cols,
+                            variable_name="verbete_col",
+                            value_name="valor_raw",
+                        )
+                        lf_final = lf_long.with_columns(
+                            pl.col("verbete_col")
+                            .replace_strict(
+                                {k: v[0] for k, v in parsed.items()},
+                                return_dtype=pl.Utf8,
+                            )
+                            .alias("verbete_codigo"),
+                            pl.col("verbete_col")
+                            .replace_strict(
+                                {k: v[1] for k, v in parsed.items()},
+                                return_dtype=pl.Utf8,
+                            )
+                            .alias("verbete_nome"),
+                            pl.col("valor_raw")
+                            .cast(pl.Int64, strict=False)
+                            .alias("valor"),
+                            pl.lit(ano).cast(pl.Int32).alias("ano"),
+                            pl.lit(mes).cast(pl.Int32).alias("mes"),
+                        ).drop(["verbete_col", "valor_raw"])
+                    else:
+                        lf_final = lf.with_columns(
+                            pl.lit("").alias("verbete_codigo"),
+                            pl.lit("").alias("verbete_nome"),
+                            pl.lit(None).cast(pl.Int64).alias("valor"),
+                            pl.lit(ano).cast(pl.Int32).alias("ano"),
+                            pl.lit(mes).cast(pl.Int32).alias("mes"),
+                        )
+
+                    if writer.is_current(
+                        raw_file, partitions=partitions, file_key_name=key
+                    ):
+                        res.skipped += 1
+                        continue
+                    written = writer.write_polars(
+                        lf_final,
+                        src=raw_file,
+                        partitions=partitions,
+                        file_key_name=key,
                     )
-
-                writer.write_polars(
-                    df_final, src=raw_file, partitions={"ano": ano, "mes": mes}
-                )
-                res.converted += 1
+                if written.status == "skipped":
+                    res.skipped += 1
+                else:
+                    res.converted += 1
             except Exception as exc:
                 res.errors.append(
-                    f"Erro ao converter ESTBAN {name} em {raw_file.name}: {exc}"
+                    f"Erro ao converter ESTBAN {shown} em {raw_file.name}: {exc}"
                 )
 
     def _convert_cosif(
         self, raw_file: Path, writer: LakeWriter, res: ConvertResult
     ) -> None:
         """Convert COSIF balancetes files into Lake Hive format."""
-        members = _read_csv_members(raw_file)
-        if not members:
-            return
 
-        for name, data_bytes in members:
-            try:
-                # cp1252
-                text = data_bytes.decode("cp1252", errors="replace")
-                cleaned = _skip_preamble_lines(
-                    text, ("#DATA_BASE", "#DATA", "DATA;", "DATA_BASE", "#")
-                )
+        def build(csv_path: Path, name: str):
+            skip = _preamble_skip(
+                csv_path, ("#DATA_BASE", "#DATA", "DATA;", "DATA_BASE", "#")
+            )
+            lf = _scan(csv_path, skip_rows=skip, decimal_comma=True)
+            if lf.head(1).collect().height == 0:
+                return None
 
-                df = pl.read_csv(
-                    io.StringIO(cleaned),
-                    separator=";",
-                    decimal_comma=True,
-                    infer_schema_length=5000,
-                )
-                if df.height == 0:
-                    continue
-
-                # Clean and map column names
-                col_map = {}
-                for c in df.columns:
-                    c_clean = c.lstrip("#").strip()
-                    norm = _norm_col(c_clean)
-                    if norm in ("data", "data_base"):
-                        col_map[c] = "data_base"
-                    elif norm in ("nome_instituicao", "nomeinstituicao"):
-                        col_map[c] = "nome_instituicao"
-                    elif norm in ("nome_conta", "nomeconta"):
-                        col_map[c] = "nome_conta"
-                    elif norm in ("cod_congl", "cod_conglomerado"):
-                        col_map[c] = "cod_congl"
-                    elif norm in ("nome_congl", "nome_conglomerado"):
-                        col_map[c] = "nome_congl"
-                    else:
-                        col_map[c] = norm
-
-                df = df.rename(col_map)
-
-                # Identify segment
-                segmento = _identify_cosif_segmento(name)
-
-                # Extract year and month
-                if "data_base" in df.columns:
-                    first_date = df["data_base"][0]
-                    ano, mes = _extract_year_month(first_date)
+            col_map = {}
+            for c in lf.collect_schema().names():
+                norm = _norm_col(c.lstrip("#").strip())
+                if norm in ("data", "data_base"):
+                    col_map[c] = "data_base"
+                elif norm in ("nome_instituicao", "nomeinstituicao"):
+                    col_map[c] = "nome_instituicao"
+                elif norm in ("nome_conta", "nomeconta"):
+                    col_map[c] = "nome_conta"
+                elif norm in ("cod_congl", "cod_conglomerado"):
+                    col_map[c] = "cod_congl"
+                elif norm in ("nome_congl", "nome_conglomerado"):
+                    col_map[c] = "nome_congl"
                 else:
-                    ano, mes = _extract_year_month(name)
+                    col_map[c] = norm
+            lf = lf.rename(col_map)
+            cols = lf.collect_schema().names()
 
-                # Account plan and account string cleaning
-                plano = "cosif_2025" if ano >= 2025 else "cosif_1988"
-                if "conta" in df.columns:
-                    # If L8 format (starts with '00' and length 10 in plano antigo)
-                    df = df.with_columns(
-                        pl.col("conta").cast(pl.Utf8).str.strip_chars().alias("conta")
-                    )
-                    if plano == "cosif_1988":
-                        df = df.with_columns(
-                            pl.when(
-                                pl.col("conta").str.starts_with("00")
-                                & (pl.col("conta").str.len_chars() == 10)
-                            )
-                            .then(pl.col("conta").str.slice(2))
-                            .otherwise(pl.col("conta"))
-                            .alias("conta")
+            segmento = _identify_cosif_segmento(name)
+            if "data_base" in cols:
+                ano, mes = _extract_year_month(_first_value(lf, "data_base"))
+            else:
+                ano, mes = _extract_year_month(name)
+
+            plano = "cosif_2025" if ano >= 2025 else "cosif_1988"
+            if "conta" in cols:
+                lf = lf.with_columns(
+                    pl.col("conta").cast(pl.Utf8).str.strip_chars().alias("conta")
+                )
+                if plano == "cosif_1988":
+                    # L8: comeca com '00' e tem 10 digitos no plano antigo
+                    lf = lf.with_columns(
+                        pl.when(
+                            pl.col("conta").str.starts_with("00")
+                            & (pl.col("conta").str.len_chars() == 10)
                         )
+                        .then(pl.col("conta").str.slice(2))
+                        .otherwise(pl.col("conta"))
+                        .alias("conta")
+                    )
 
-                # Add metadata columns: moeda, plano, segmento, ano
-                moeda = moeda_for_date(ano, mes)
-                df = df.with_columns(
-                    pl.lit(moeda).alias("moeda"),
-                    pl.lit(plano).alias("plano"),
-                    pl.lit(segmento).alias("segmento"),
-                    pl.lit(ano).cast(pl.Int32).alias("ano"),
-                )
+            lf = lf.with_columns(
+                pl.lit(moeda_for_date(ano, mes)).alias("moeda"),
+                pl.lit(plano).alias("plano"),
+                pl.lit(segmento).alias("segmento"),
+                pl.lit(ano).cast(pl.Int32).alias("ano"),
+            )
+            return lf, {"segmento": segmento, "ano": ano}
 
-                writer.write_polars(
-                    df,
-                    src=raw_file,
-                    partitions={"segmento": segmento, "ano": ano},
-                )
-                res.converted += 1
-            except Exception as exc:
-                res.errors.append(
-                    f"Erro ao converter COSIF {name} em {raw_file.name}: {exc}"
-                )
+        _convert_members(raw_file, writer, res, "COSIF", ENCODINGS["cosif"], build)
 
 
 converter = BcbMicrodadosLakeConverter()
