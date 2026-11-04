@@ -7,6 +7,8 @@ from typing import Any
 BCB_BASE_URL = "https://www.bcb.gov.br"
 BCB_CONTEUDO_URL = "https://www.bcb.gov.br/api/servico/sitebcb/conteudosite"
 BCB_DOCUMENTOS_URL = "https://www.bcb.gov.br/api/servico/sitebcb/Documentos/byListGuid"
+COSIF_IDENTIFICADOR = "cosif"
+ESTBAN_IDENTIFICADOR = "estatistica_bancaria_estban"
 SCR_URL_TEMPLATE = "https://www.bcb.gov.br/pda/desig/scrdata_{year}.zip"
 
 # COSIF pastas / segmentos

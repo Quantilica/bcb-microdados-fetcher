@@ -7,6 +7,20 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ## [Não lançado]
 
+### Adicionado
+- ESTBAN (`municipio`, `agencia`) e COSIF (8 segmentos) de volta ao catálogo, via a
+  listagem JSON interna do BCB (`conteudosite` -> `Documentos/byListGuid`), que segue
+  respondendo apesar de os caminhos antigos `/estban/...` e `/cosif/...` terem virado
+  a SPA (HTML). O catálogo usa sempre a `Url` da listagem (nunca monta o nome),
+  deduplica por período (2025-12 tem `X.csv.zip` e `X.zip.csv.zip`) e guarda tamanho,
+  data de publicação e duplicatas em `extra`. Listagem que falha é erro contado
+  (`DiscoveryReport.listing_errors`), sem derrubar as demais pastas.
+  `BCB_DISCOVER=0` desliga a descoberta (testes offline).
+- SCR.data dirigido por HEAD: o catálogo só inclui os anos cujo `scrdata_{ano}.zip`
+  existe (inclui o ano seguinte, assim que o BCB o publica); HEAD inconclusivo mantém
+  o ano e é contado. O BCB não expõe listagem JSON dos ZIPs do SCR.data (a pasta `scr`
+  traz só PDFs e a inadimplência por coorte).
+
 ### Corrigido
 - Política de frescor volta a F2 (`HEAD_FALLBACK_GET`): `REMOTE_ONLY` (F3, para fontes sem validadores) causava re-download diário de fontes com Last-Modified/ETag, porque descartava o Last-Modified e o nome do arquivo caía em `@hoje`.
 

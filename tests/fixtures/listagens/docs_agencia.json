@@ -1,0 +1,26 @@
+{
+ "conteudo": [
+  {
+   "Url": "/content/estatisticas/estatistica_bancaria_estban/agencia/202606_ESTBAN_AG.csv.zip",
+   "data": "2026-09-04T13:44:48Z",
+   "Nome": "202606_ESTBAN_AG.csv.zip",
+   "Tamanho": "1435172",
+   "Titulo": "06/2026",
+   "DataPublicacao": "2026-09-04T13:44:48Z",
+   "DataDocumento": "2026-06-01T03:00:00Z"
+  },
+  {
+   "Url": "/content/estatisticas/estatistica_bancaria_estban/agencia/198807_ESTBAN_AG.ZIP",
+   "data": "2023-08-10T17:52:26Z",
+   "Nome": "198807_ESTBAN_AG.ZIP",
+   "Tamanho": "1594303",
+   "Titulo": "07/1988",
+   "DataPublicacao": "2023-08-10T17:52:26Z",
+   "DataDocumento": "1988-07-01T03:00:00Z"
+  },
+  {
+   "Url": null,
+   "Nome": null
+  }
+ ]
+}

@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from quantilica.core.http import HttpClient
+from quantilica.core.http import HttpClient, HttpStatusError
 from quantilica.core.logging import get_logger
 from quantilica.core.manifests import DownloadManifest
 
@@ -50,7 +50,12 @@ class BcbMicrodadosClient:
         pasta: str,
         qtd_itens: int = 9999,
     ) -> list[dict[str, Any]]:
-        """List documents inside a pasta using Documentos/byListGuid."""
+        """List documents inside a pasta using Documentos/byListGuid.
+
+        Levanta a exceção do cliente HTTP se a listagem falhar (quem chama decide
+        entre contar o erro e seguir), e ``ValueError`` se a resposta não tiver o
+        formato ``{"conteudo": [...]}``.
+        """
         params = {
             "tronco": tronco,
             "guidLista": guid_lista,
@@ -58,15 +63,26 @@ class BcbMicrodadosClient:
             "ordem": "DataDocumento desc",
             "qtditens": qtd_itens,
         }
+        data = self.client.get_json(BCB_DOCUMENTOS_URL, params=params)
+        items = data.get("conteudo") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            raise ValueError(f"Resposta inesperada da listagem de {pasta!r}")
+        return items
+
+    def url_exists(self, url: str) -> bool | None:
+        """HEAD (ou GET só de cabeçalhos): ``True``/``False``, ``None`` se incerto.
+
+        ``False`` só para 404 real; qualquer outra falha devolve ``None`` para que o
+        chamador não trate indisponibilidade transitória como arquivo inexistente.
+        """
         try:
-            data = self.client.get_json(BCB_DOCUMENTOS_URL, params=params)
-            if isinstance(data, dict):
-                items = data.get("conteudo", [])
-                if isinstance(items, list):
-                    return items
+            self.client.head_or_get(url)
+            return True
+        except HttpStatusError as exc:
+            return False if exc.status_code == 404 else None
         except Exception as exc:
-            self.logger.warning("Erro ao listar documentos da pasta %s: %s", pasta, exc)
-        return []
+            self.logger.warning("HEAD %s falhou: %s", url, exc)
+            return None
 
     def download_file(
         self,
