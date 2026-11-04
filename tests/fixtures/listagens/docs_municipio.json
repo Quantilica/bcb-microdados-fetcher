@@ -1,0 +1,44 @@
+{
+ "conteudo": [
+  {
+   "Url": "/content/estatisticas/estatistica_bancaria_estban/municipio/202606_ESTBAN.csv.zip",
+   "data": "2026-09-04T13:44:04Z",
+   "Nome": "202606_ESTBAN.csv.zip",
+   "Tamanho": "883348",
+   "Titulo": "06/2026",
+   "DataPublicacao": "2026-09-04T13:44:04Z",
+   "DataDocumento": "2026-06-01T03:00:00Z"
+  },
+  {
+   "Url": "/content/estatisticas/estatistica_bancaria_estban/municipio/202301_ESTBAN.csv",
+   "data": "2023-08-07T16:29:05Z",
+   "Nome": "202301_ESTBAN.csv",
+   "Tamanho": "2726569",
+   "Titulo": "01/2023",
+   "DataPublicacao": "2023-08-07T16:29:05Z",
+   "DataDocumento": "2023-01-01T03:00:00Z"
+  },
+  {
+   "Url": "/content/estatisticas/estatistica_bancaria_estban/municipio/202212_ESTBAN.ZIP",
+   "data": "2023-08-10T17:52:06Z",
+   "Nome": "202212_ESTBAN.ZIP",
+   "Tamanho": "977817",
+   "Titulo": "12/2022",
+   "DataPublicacao": "2023-08-10T17:52:06Z",
+   "DataDocumento": "2022-12-01T03:00:00Z"
+  },
+  {
+   "Url": "/content/estatisticas/estatistica_bancaria_estban/municipio/198807_ESTBAN.ZIP",
+   "data": "2023-08-10T17:48:36Z",
+   "Nome": "198807_ESTBAN.ZIP",
+   "Tamanho": "1249821",
+   "Titulo": "07/1988",
+   "DataPublicacao": "2023-08-10T17:48:36Z",
+   "DataDocumento": "1988-07-01T03:00:00Z"
+  },
+  {
+   "Url": null,
+   "Nome": null
+  }
+ ]
+}
