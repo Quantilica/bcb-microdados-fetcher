@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,23 @@ class BcbMicrodadosClient:
         except Exception as exc:
             self.logger.warning("HEAD %s falhou: %s", url, exc)
             return None
+
+    def has_rows(self, url: str) -> bool | None:
+        """Consulta OData com ``$top=1``: ``True`` se vier ao menos uma linha.
+
+        ``False`` só para resposta válida com ``value`` vazio (mês ainda não
+        publicado); falha de rede/HTTP devolve ``None`` (inconclusivo).
+        """
+        probe = re.sub(r"\$top=\d+", "$top=1", url)
+        try:
+            data = self.client.get_json(probe)
+        except Exception as exc:
+            self.logger.warning("consulta OData %s falhou: %s", probe, exc)
+            return None
+        value = data.get("value") if isinstance(data, dict) else None
+        if not isinstance(value, list):
+            return None
+        return bool(value)
 
     def download_file(
         self,

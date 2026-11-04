@@ -88,6 +88,25 @@ ESTBAN_PASTAS: dict[str, dict[str, Any]] = {
 
 SCR_START_YEAR = 2012
 
+# --- Olinda (OData) -----------------------------------------------------------
+# Os dados só respondem pela *função* ``Nome(Param=@Param)?@Param=...``; o
+# conjunto de entidades (``_Nome``) devolve 500 (sondado em 2026-11-03).
+OLINDA_BASE = "https://olinda.bcb.gov.br/olinda/servico"
+PIX_MUNICIPIO_URL_TEMPLATE = (
+    OLINDA_BASE
+    + "/Pix_DadosAbertos/versao/v1/odata/TransacoesPixPorMunicipio(DataBase=@DataBase)"
+    + "?@DataBase=%27{ym}%27&$filter=AnoMes%20eq%20{ym}&$top=10000&$format=json"
+)
+SCR_SUBREGIAO_URL_TEMPLATE = (
+    OLINDA_BASE
+    + "/scr_sub_regiao/versao/v1/odata/scr_sub_regiao(DataBase=@DataBase)"
+    + "?@DataBase={ym}&$top=100000&$format=json"
+)
+# Primeiro mês com dados (sondado): Pix 202010 vem vazio e 202011 não; scr_sub_regiao
+# responde desde 2006-01 (200501 vem vazio).
+PIX_START = (2020, 11)
+SCR_SUBREGIAO_START = (2006, 1)
+
 
 def moeda_for_date(year: int, month: int) -> str:
     """Return official currency standard for a given date in Brazil."""

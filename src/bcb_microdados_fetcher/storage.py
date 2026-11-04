@@ -36,6 +36,12 @@ class DataRepository(BaseDataRepository):
 
         timestamp = last_modified or dt.date.today()
 
+        extra = entry.get("extra") or {}
+        if extra.get("stable_name") and year is not None and month is not None:
+            # Olinda não devolve Last-Modified: sem carimbo @data o nome mudaria
+            # todo dia e o arquivo seria baixado de novo. Reforçar com --force.
+            return self.storage.path_for(f"{group}/{base_id}_{year}-{month:02d}.{ext}")
+
         if year is None:
             filename = stamp_filename(base_id, ext, timestamp)
         elif month is not None:

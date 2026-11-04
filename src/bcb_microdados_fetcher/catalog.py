@@ -26,7 +26,11 @@ from .constants import (
     COSIF_SEGMENTOS,
     ESTBAN_IDENTIFICADOR,
     ESTBAN_PASTAS,
+    PIX_MUNICIPIO_URL_TEMPLATE,
+    PIX_START,
     SCR_START_YEAR,
+    SCR_SUBREGIAO_START,
+    SCR_SUBREGIAO_URL_TEMPLATE,
     SCR_URL_TEMPLATE,
 )
 
@@ -62,6 +66,47 @@ def _build_scr_entries(
     return entries
 
 
+#: grupos mensais servidos por funções OData do Olinda (um JSON por mês).
+OLINDA_GROUPS: dict[str, dict[str, Any]] = {
+    "pix_municipio_transacoes": {
+        "name": "Pix — Transações por Município (Olinda Pix_DadosAbertos)",
+        "template": PIX_MUNICIPIO_URL_TEMPLATE,
+        "start": PIX_START,
+    },
+    "scr_sub_regiao": {
+        "name": "SCR por Sub-região (Olinda scr_sub_regiao)",
+        "template": SCR_SUBREGIAO_URL_TEMPLATE,
+        "start": SCR_SUBREGIAO_START,
+    },
+}
+
+
+def _build_olinda_entries(
+    group: str, *, today: dt.date | None = None
+) -> list[DatasetEntry]:
+    """Uma entrada por mês, do primeiro mês com dados até o mês corrente."""
+    meta = OLINDA_GROUPS[group]
+    today = today or dt.date.today()
+    year, month = meta["start"]
+    entries: list[DatasetEntry] = []
+    while (year, month) <= (today.year, today.month):
+        entries.append(
+            DatasetEntry(
+                id=f"{group}_{year}_{month:02d}",
+                base_id=group,
+                name=f"{meta['name']} ({year}-{month:02d})",
+                url=meta["template"].format(ym=f"{year}{month:02d}"),
+                ext="json",
+                group=group,
+                year=year,
+                month=month,
+                extra={"stable_name": True, "protocol": "olinda-function"},
+            )
+        )
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return entries
+
+
 def _build_all_groups() -> dict[str, GroupInfo]:
     """Assemble all dataset groups (ESTBAN/COSIF só existem via descoberta)."""
     return {
@@ -69,6 +114,10 @@ def _build_all_groups() -> dict[str, GroupInfo]:
             name="SCR.data — Carteira de Crédito Agregada",
             entries=_build_scr_entries(),
         ),
+        **{
+            group: GroupInfo(name=meta["name"], entries=_build_olinda_entries(group))
+            for group, meta in OLINDA_GROUPS.items()
+        },
         "estban": GroupInfo(name="ESTBAN — Estatística Bancária Mensal", entries=[]),
         "cosif": GroupInfo(
             name="COSIF — Balancetes e Balanços Patrimoniais", entries=[]
@@ -90,6 +139,9 @@ GROUP_ALIASES: dict[str, str] = {
     "bancos": "cosif",
     "balancetes": "cosif",
     "balancos": "cosif",
+    "pix": "pix_municipio_transacoes",
+    "pix_municipio": "pix_municipio_transacoes",
+    "scr_risco": "scr_sub_regiao",
 }
 
 
@@ -113,6 +165,8 @@ class DiscoveryReport:
     duplicates: list[tuple[str, int, int]] = field(default_factory=list)
     #: anos de SCR em que o HEAD foi inconclusivo (mantidos por aritmética).
     scr_inconclusive: list[int] = field(default_factory=list)
+    #: meses Olinda (pix, scr_sub_regiao) sem resposta conclusiva (mantidos).
+    olinda_inconclusive: list[str] = field(default_factory=list)
 
     @property
     def errors(self) -> int:
@@ -210,7 +264,9 @@ def discover(
 ) -> DiscoveryReport:
     """Monta o catálogo a partir da listagem real do BCB (ESTBAN, COSIF e SCR)."""
     api = client or BcbMicrodadosClient()
-    report = DiscoveryReport(entries={"scr": [], "estban": [], "cosif": []})
+    report = DiscoveryReport(
+        entries={"scr": [], "estban": [], "cosif": [], **{g: [] for g in OLINDA_GROUPS}}
+    )
 
     plans: list[tuple[str, str, list[tuple[str, str, str, dict[str, Any]]]]] = [
         (
@@ -284,7 +340,32 @@ def discover(
         report.entries["scr"] = _build_scr_entries(
             years, end_year=dt.date.today().year + 1
         )
+    for group in OLINDA_GROUPS:
+        report.entries[group] = _prune_unpublished(
+            api, _build_olinda_entries(group), report
+        )
     return report
+
+
+def _prune_unpublished(
+    api: BcbMicrodadosClient, entries: list[DatasetEntry], report: DiscoveryReport
+) -> list[DatasetEntry]:
+    """Tira do fim os meses que o Olinda ainda devolve vazios (não publicados).
+
+    Olha no máximo 4 meses do fim; resposta inconclusiva mantém o mês (e o conta).
+    """
+    kept = list(entries)
+    for _ in range(4):
+        if not kept:
+            break
+        ok = api.has_rows(kept[-1].url)
+        if ok is True:
+            break
+        if ok is None:
+            report.olinda_inconclusive.append(kept[-1].id)
+            break
+        kept.pop()
+    return kept
 
 
 _REPORT: DiscoveryReport | None = None
@@ -306,7 +387,9 @@ def _discovery_enabled() -> bool:
 
 
 def _group_entries(group: str) -> list[dict[str, Any]]:
-    if _REPORT is not None and (group == "scr" or _REPORT.entries.get(group)):
+    if _REPORT is not None and (
+        group == "scr" or group in OLINDA_GROUPS or _REPORT.entries.get(group)
+    ):
         return [e.to_dict() for e in _REPORT.entries.get(group, [])]
     return list(GROUPS[group]["entries"])
 

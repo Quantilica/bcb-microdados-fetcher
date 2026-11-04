@@ -8,6 +8,33 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 ## [0.2.0] - 2026-11-04
 
 ### Adicionado
+- `pix_municipio_transacoes` (TC-03): transações Pix por município, do Olinda
+  `Pix_DadosAbertos`, de 2020-11 até o último mês publicado (um JSON por mês, ~5,6 mil
+  linhas). O `500` de 30/10 vinha de consultar o conjunto de entidades
+  (`_TransacoesPixPorMunicipio`); a *função* responde `200`:
+  `TransacoesPixPorMunicipio(DataBase=@DataBase)?@DataBase='AAAAMM'&$filter=AnoMes eq AAAAMM`
+  (sem o `$filter`, `DataBase` devolve todos os meses a partir dele, em ordem aleatória).
+  Lake: `codigo_ibge` (7) e `uf_ibge` (2) como texto, valores `Decimal(20,2)`, contagens
+  inteiras, partição `ano/mes` vinda do próprio dado.
+- `scr_sub_regiao` (TC-03): SCR por UF/sub-região/modalidade do Olinda `scr_sub_regiao`
+  (função `scr_sub_regiao(DataBase=@DataBase)`), 2006-01 em diante. `risco` só vem
+  preenchido (`AA-C`/`D-H`) até 2024-12; de 2025-01 é nulo e de 2026-03 é `N/D`.
+- A descoberta tira do fim os meses Olinda ainda vazios (`$top=1`); resposta
+  inconclusiva mantém o mês e entra em `DiscoveryReport.olinda_inconclusive`.
+- Arquivos Olinda têm nome estável (`<grupo>_AAAA-MM.json`, sem `@data`): o Olinda não manda
+  `Last-Modified`, e o carimbo do dia faria baixar tudo de novo a cada execução.
+  Use `--force` para rebaixar um mês revisado.
+
+### Sondado e não implementado (TC-03)
+- `fluxo_cambial_diario`: nenhum serviço Olinda (28 nomes testados, todos 404), nada no CKAN
+  do BCB fora do SGS, e as páginas `/estatisticas/fluxocambial` etc. devolvem a SPA em HTML
+  (206). A única fonte máquina-a-máquina é o SGS, já coberto por `bcb-sgs-fetcher` e pelo
+  pipeline `movimento_cambio_contratado`.
+- `scr_carteira_cnae_rating`: o cruzamento CNAE x rating não é publicado. O `scrdata_{ano}.zip`
+  (2013 e 2025 conferidos) traz `cnae_ocupacao` e `porte`, mas nenhuma coluna de risco/rating,
+  e já é o dataset `scr`; o Olinda `SCR` responde `401`. O risco (`AA-C`/`D-H`) existe só em
+  `scr_sub_regiao`, sem CNAE.
+
 - ESTBAN (`municipio`, `agencia`) e COSIF (8 segmentos) de volta ao catálogo, via a
   listagem JSON interna do BCB (`conteudosite` -> `Documentos/byListGuid`), que segue
   respondendo apesar de os caminhos antigos `/estban/...` e `/cosif/...` terem virado
@@ -22,6 +49,8 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
   traz só PDFs e a inadimplência por coorte).
 
 ### Corrigido
+- `convert` identifica `scr_sub_regiao` e `pix_municipio_transacoes` pelo diretório do grupo, antes
+  da busca por substring "scr".
 - Lake (`scr`, `estban_*`, `cosif`): ZIP com varios membros perdia os membros 2..N (chave de origem so do ZIP; mesma classe do bug A1). Agora cada membro tem chave composta zip+membro, e a leitura e em streaming (transcodificacao em blocos para UTF-8 temporario, sem `ZipFile.read`), com decodificacao estrita (SCR utf-8, ESTBAN latin-1, COSIF cp1252): byte invalido e erro contado do membro, nunca U+FFFD. Reconverter com `--force` os parquets legados de ZIPs multi-membro.
 - Política de frescor volta a F2 (`HEAD_FALLBACK_GET`): `REMOTE_ONLY` (F3, para fontes sem validadores) causava re-download diário de fontes com Last-Modified/ETag, porque descartava o Last-Modified e o nome do arquivo caía em `@hoje`.
 

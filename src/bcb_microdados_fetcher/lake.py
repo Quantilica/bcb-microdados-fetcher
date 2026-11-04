@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import codecs
+import json
 import logging
 import os
 import re
@@ -33,7 +34,17 @@ except ImportError as exc:
 from .constants import COSIF_SEGMENTOS, moeda_for_date
 
 SOURCE_ID = "bcb-microdados"
-DATASETS = ["scr", "estban_municipio", "estban_agencia", "cosif"]
+DATASETS = [
+    "scr",
+    "estban_municipio",
+    "estban_agencia",
+    "cosif",
+    "pix_municipio_transacoes",
+    "scr_sub_regiao",
+]
+#: datasets Olinda (JSON mensal); identificados pelo diretório do grupo, exato,
+#: porque ``scr_sub_regiao`` contém "scr" e não pode cair no conversor do SCR.data.
+OLINDA_DATASETS = ("pix_municipio_transacoes", "scr_sub_regiao")
 
 
 def _norm_col(col_name: str) -> str:
@@ -215,6 +226,64 @@ def _identify_cosif_segmento(filename: str) -> str:
     return "bancos"
 
 
+_MONEY = pl.Decimal(precision=20, scale=2)
+
+
+def _read_olinda(path: Path, dataset: str) -> tuple[pl.DataFrame, dict[str, int]]:
+    """Lê o JSON ``{"value": [...]}`` de uma função OData e tipa as colunas.
+
+    Códigos de município/UF e de sub-região são texto; valores monetários são
+    decimais (2 casas); contagens, inteiros. A partição ``ano``/``mes`` vem do
+    próprio dado (``AnoMes``/``DATA_BASE``) e precisa ser única no arquivo.
+
+    Raises:
+        ValueError: JSON sem ``value``, vazio, ou com mais de um mês.
+    """
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    rows = payload.get("value") if isinstance(payload, dict) else None
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("JSON do Olinda sem linhas em 'value'")
+    df = pl.DataFrame(rows, infer_schema_length=None)
+    if dataset == "pix_municipio_transacoes":
+        period_col = "AnoMes"
+        df = df.with_columns(
+            pl.col("Municipio_Ibge").cast(pl.String).str.zfill(7),
+            pl.col("Estado_Ibge").cast(pl.String).str.zfill(2),
+            *[pl.col(c).cast(_MONEY) for c in df.columns if c.startswith("VL_")],
+            *[pl.col(c).cast(pl.Int64) for c in df.columns if c.startswith("QT_")],
+        )
+        renames = {c: re.sub(r"(PF|PJ)$", r"_\1", c) for c in df.columns}
+        renames.update({"Municipio_Ibge": "codigo_ibge", "Estado_Ibge": "uf_ibge"})
+        df = df.rename(renames)
+    else:
+        period_col = "DATA_BASE"
+        df = df.with_columns(
+            pl.col("SUB_REGIAO").cast(pl.String),
+            pl.col("OPERACOES").cast(pl.Int64),
+            *[
+                pl.col(c).cast(_MONEY)
+                for c in df.columns
+                if c
+                not in {
+                    "DATA_BASE",
+                    "CLIENTE",
+                    "ESTADO",
+                    "SUB_REGIAO",
+                    "MODALIDADE",
+                    "RISCO",
+                    "OPERACOES",
+                }
+            ],
+        )
+    periods = df[period_col].unique().to_list()
+    if len(periods) != 1:
+        raise ValueError(f"arquivo com {len(periods)} períodos em {period_col}")
+    ano, mes = _extract_year_month(periods[0])
+    df = df.rename({c: _norm_col(c) for c in df.columns if c != _norm_col(c)})
+    df = df.drop(_norm_col(period_col))
+    return df, {"ano": ano, "mes": mes}
+
+
 class BcbMicrodadosLakeConverter:
     """Universal Hive Lake converter for BCB SCR, ESTBAN, and COSIF datasets."""
 
@@ -244,6 +313,19 @@ class BcbMicrodadosLakeConverter:
 
         # Initialize writers
         writers: dict[str, LakeWriter] = {}
+        for olinda_ds in OLINDA_DATASETS:
+            if olinda_ds in target_datasets:
+                writers[olinda_ds] = LakeWriter(
+                    lake_path / self.source_id / olinda_ds,
+                    DatasetDescriptor(
+                        source_id=self.source_id,
+                        dataset_id=olinda_ds,
+                        alias=olinda_ds,
+                        partition_keys=["ano", "mes"],
+                        partition_types=partition_types_for(["ano", "mes"]),
+                    ),
+                    force=force,
+                )
         if "scr" in target_datasets:
             writers["scr"] = LakeWriter(
                 lake_path / self.source_id / "scr",
@@ -301,8 +383,14 @@ class BcbMicrodadosLakeConverter:
             fname = raw_file.name.lower()
             parent = raw_file.parent.name.lower()
 
+            # 0. Olinda (JSON mensal): grupo exato, antes do "scr" por substring
+            if parent in OLINDA_DATASETS:
+                if raw_file.name.endswith(".manifest.json"):
+                    continue
+                if parent in writers:
+                    self._convert_olinda(raw_file, parent, writers[parent], res)
             # 1. SCR files
-            if "scr" in fname or "scr" in parent or "scrdata" in fname:
+            elif "scr" in fname or "scr" in parent or "scrdata" in fname:
                 if "scr" in writers:
                     self._convert_scr(raw_file, writers["scr"], res)
             # 2. ESTBAN files
@@ -318,6 +406,24 @@ class BcbMicrodadosLakeConverter:
                     self._convert_cosif(raw_file, writers["cosif"], res)
 
         return res
+
+    def _convert_olinda(
+        self, raw_file: Path, dataset: str, writer: LakeWriter, res: ConvertResult
+    ) -> None:
+        """Converte o JSON mensal de uma função OData do Olinda."""
+        try:
+            df, partitions = _read_olinda(raw_file, dataset)
+            if writer.is_current(raw_file, partitions=partitions):
+                res.skipped += 1
+                return
+            written = writer.write_polars(df, src=raw_file, partitions=partitions)
+        except Exception as exc:
+            res.errors.append(f"Erro ao converter {dataset} {raw_file.name}: {exc}")
+            return
+        if written.status == "skipped":
+            res.skipped += 1
+        else:
+            res.converted += 1
 
     def _convert_scr(
         self, raw_file: Path, writer: LakeWriter, res: ConvertResult

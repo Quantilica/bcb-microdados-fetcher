@@ -313,3 +313,99 @@ def test_leitura_nao_carrega_o_membro_inteiro(tmp_path: Path, monkeypatch) -> No
     lake.mkdir()
     res = converter.convert(tmp_path / "raw", lake)
     assert not res.errors and res.converted == 1
+
+
+FIX = Path(__file__).parent / "fixtures" / "olinda"
+
+
+def _stage(tmp_path: Path, group: str, name: str, fixture: str) -> Path:
+    raw = tmp_path / "raw"
+    (raw / group).mkdir(parents=True)
+    (raw / group / name).write_bytes((FIX / fixture).read_bytes())
+    return raw
+
+
+def test_pix_municipio_transacoes_lake(tmp_path: Path) -> None:
+    raw = _stage(
+        tmp_path,
+        "pix_municipio_transacoes",
+        "pix_municipio_transacoes_2025-09.json",
+        "pix_municipio_202509.json",
+    )
+    lake = tmp_path / "lake"
+    res = converter.convert(raw, lake)
+    assert (res.converted, res.errors) == (1, [])
+
+    dataset_dir = lake / "bcb-microdados" / "pix_municipio_transacoes"
+    assert check_dataset(dataset_dir) == []
+    assert (dataset_dir / "ano=2025" / "mes=9").exists() or (
+        dataset_dir / "ano=2025" / "mes=09"
+    ).exists()
+    df = pl.read_parquet(next(dataset_dir.rglob("*.parquet")))
+    assert df.schema["codigo_ibge"] == pl.String
+    assert df["codigo_ibge"][0] == "1200450"
+    assert all(len(v) == 7 for v in df["codigo_ibge"])
+    assert df.schema["uf_ibge"] == pl.String and df["uf_ibge"][0] == "12"
+    assert isinstance(df.schema["vl_pagador_pf"], pl.Decimal)
+    assert str(df["vl_pagador_pf"][0]) == "87211594.48"
+    assert df["qt_pagador_pf"][0] == 647985
+    assert "ano_mes" not in df.columns
+
+    again = converter.convert(raw, lake)
+    assert (again.converted, again.skipped, again.errors) == (0, 1, [])
+
+
+def test_scr_sub_regiao_is_not_taken_by_scr_converter(tmp_path: Path) -> None:
+    raw = _stage(
+        tmp_path,
+        "scr_sub_regiao",
+        "scr_sub_regiao_2020-12.json",
+        "scr_sub_regiao_202012.json",
+    )
+    lake = tmp_path / "lake"
+    res = converter.convert(raw, lake)
+    assert (res.converted, res.errors) == (1, [])
+    assert not (lake / "bcb-microdados" / "scr").exists()
+
+    dataset_dir = lake / "bcb-microdados" / "scr_sub_regiao"
+    assert check_dataset(dataset_dir) == []
+    df = pl.read_parquet(next(dataset_dir.rglob("*.parquet")))
+    assert df.schema["sub_regiao"] == pl.String
+    assert set(df["risco"].to_list()) <= {"AA-C", "D-H"}
+    assert df.schema["operacoes"] == pl.Int64
+    assert isinstance(df.schema["carteira"], pl.Decimal)
+
+
+def test_scr_sub_regiao_risco_descontinuado_fica_nulo_ou_nd(tmp_path: Path) -> None:
+    raw = _stage(
+        tmp_path,
+        "scr_sub_regiao",
+        "scr_sub_regiao_2026-09.json",
+        "scr_sub_regiao_202609.json",
+    )
+    res = converter.convert(raw, tmp_path / "lake")
+    assert (res.converted, res.errors) == (1, [])
+    df = pl.read_parquet(
+        next(
+            (tmp_path / "lake" / "bcb-microdados" / "scr_sub_regiao").rglob("*.parquet")
+        )
+    )
+    assert set(df["risco"].to_list()) == {"N/D"}
+
+
+def test_olinda_json_empty_or_multi_month_is_counted_error(tmp_path: Path) -> None:
+    raw = tmp_path / "raw" / "pix_municipio_transacoes"
+    raw.mkdir(parents=True)
+    (raw / "pix_municipio_transacoes_2025-09.json").write_text('{"value": []}')
+    res = converter.convert(tmp_path / "raw", tmp_path / "lake")
+    assert res.converted == 0 and len(res.errors) == 1
+    assert "sem linhas" in res.errors[0]
+
+    multi = (FIX / "pix_municipio_202509.json").read_text()
+    rows = __import__("json").loads(multi)
+    rows["value"][0]["AnoMes"] = 202510
+    (raw / "pix_municipio_transacoes_2025-09.json").write_text(
+        __import__("json").dumps(rows)
+    )
+    res = converter.convert(tmp_path / "raw", tmp_path / "lake", force=True)
+    assert len(res.errors) == 1 and "períodos" in res.errors[0]

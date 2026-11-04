@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,15 @@ class FakeHttp:
         scr_years: set[int] | None = None,
         head_fail: bool = False,
         no_conteudo: set[str] | None = None,
+        olinda_last: int | None = None,
+        olinda_fail: bool = False,
     ) -> None:
+        # último mês (AAAAMM) com linhas nas funções do Olinda; padrão: mês anterior
+        today = dt.date.today()
+        prev = dt.date(today.year, today.month, 1) - dt.timedelta(days=1)
+        self.olinda_last = olinda_last or prev.year * 100 + prev.month
+        self.olinda_fail = olinda_fail
+        self.olinda_calls: list[str] = []
         self.scr_years = scr_years if scr_years is not None else set(range(2012, 2027))
         self.head_fail = head_fail
         self.no_conteudo = no_conteudo or set()
@@ -32,6 +41,12 @@ class FakeHttp:
 
     def get_json(self, url: str, params: dict | None = None):
         params = params or {}
+        if "olinda.bcb.gov.br" in url:
+            self.olinda_calls.append(url)
+            if self.olinda_fail:
+                raise HttpStatusError(url, 500)
+            ym = int(re.search(r"@DataBase=(?:%27)?(\d{6})", url).group(1))
+            return {"value": [{"AnoMes": ym}] if ym <= self.olinda_last else []}
         if url.endswith("conteudosite"):
             ident = params["identificador"]
             if ident in self.no_conteudo:
@@ -123,7 +138,43 @@ def test_list_datasets_serve_descoberta(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(catalog, "_REPORT", catalog.discover(_api()))
     ids = {e["id"] for e in catalog.list_datasets("estban")}
     assert "estban_agencia_2026_06" in ids
-    assert {e["group"] for e in catalog.list_datasets()} == {"scr", "estban", "cosif"}
+    assert {e["group"] for e in catalog.list_datasets()} == {
+        "scr",
+        "estban",
+        "cosif",
+        "pix_municipio_transacoes",
+        "scr_sub_regiao",
+    }
     monkeypatch.setattr(catalog, "_REPORT", None)
     assert catalog.list_datasets("estban") == []  # BCB_DISCOVER=0: sem rede
     assert catalog.list_datasets("scr")  # aritmética de fallback
+
+
+def test_olinda_meses_nao_publicados_saem_do_fim() -> None:
+    today = dt.date.today()
+    fake_last = 202509
+    rep = catalog.discover(_api(olinda_last=fake_last))
+    pix = rep.entries["pix_municipio_transacoes"]
+    assert (pix[0].year, pix[0].month) == (2020, 11)
+    # só olha os 4 últimos meses; o resto do intervalo fica pela aritmética
+    months_to_today = (today.year - 2025) * 12 + today.month - 9
+    if months_to_today <= 4:
+        assert (pix[-1].year, pix[-1].month) == (2025, 9)
+    assert all(e.url.startswith("https://olinda.bcb.gov.br/") for e in pix)
+    assert rep.olinda_inconclusive == []
+
+
+def test_olinda_sondagem_usa_top_1() -> None:
+    api = _api()
+    catalog.discover(api)
+    probes = api.client.olinda_calls  # type: ignore[attr-defined]
+    assert probes and all("$top=1&" in u for u in probes)
+
+
+def test_olinda_inconclusivo_mantem_o_mes_e_conta() -> None:
+    rep = catalog.discover(_api(olinda_fail=True))
+    assert rep.entries["scr_sub_regiao"][-1].month == dt.date.today().month
+    assert sorted(set(i.rsplit("_", 2)[0] for i in rep.olinda_inconclusive)) == [
+        "pix_municipio_transacoes",
+        "scr_sub_regiao",
+    ]
