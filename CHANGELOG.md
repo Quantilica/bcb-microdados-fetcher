@@ -25,7 +25,7 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
   `Last-Modified`, e o carimbo do dia faria baixar tudo de novo a cada execução.
   Use `--force` para rebaixar um mês revisado.
 
-### Sondado e não implementado (TC-03)
+Sondado e não implementado (TC-03):
 - `fluxo_cambial_diario`: nenhum serviço Olinda (28 nomes testados, todos 404), nada no CKAN
   do BCB fora do SGS, e as páginas `/estatisticas/fluxocambial` etc. devolvem a SPA em HTML
   (206). A única fonte máquina-a-máquina é o SGS, já coberto por `bcb-sgs-fetcher` e pelo
