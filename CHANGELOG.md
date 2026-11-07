@@ -5,6 +5,20 @@ Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.3.0] - 2026-11-06
+
+### Corrigido
+- COSIF: a conversão falhava no balancete prudencial de 2026-06, cuja coluna `CNPJ`
+  traz o código do conglomerado (`C0085111`) depois de milhares de linhas numéricas,
+  fora da janela de inferência de tipos.
+
+### Alterado
+- COSIF e ESTBAN: identificadores agora são lidos como texto. Antes eram inteiros e
+  perdiam os zeros à esquerda (`00000000` virava `0`). No COSIF, isso vale para `cnpj`,
+  `agencia`, `cod_congl`, `taxonomia` e `conta`. Na ESTBAN, para `cnpj` e `agencia`.
+  Partições gravadas por versões anteriores precisam ser reconvertidas (`force`) para que
+  o tipo seja o mesmo em todo o dataset.
+
 ## [0.2.0] - 2026-11-04
 
 ### Adicionado
