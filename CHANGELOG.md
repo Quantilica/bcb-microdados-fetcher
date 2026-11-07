@@ -5,6 +5,15 @@ Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [Não lançado]
+
+### Alterado
+- ESTBAN: nova coluna `moeda` com o padrão monetário da data-base (`Cz$` até 1988-12, `NCz$`, `Cr$`, `CR$` e `R$` a partir de 1994-07), como no COSIF. Os valores continuam na moeda da época, sem conversão.
+
+### Corrigido
+- ESTBAN por município: `AGEN_ESPERADAS` e `AGEN_PROCESSADAS` (quantidade de agências esperadas e processadas da instituição no município) viravam linhas com `verbete_codigo` `agen_esperadas` e `agen_processadas`, misturadas aos saldos. Agora são colunas inteiras de cada linha, e somas por verbete não incluem mais essas contagens.
+- ESTBAN: textos (município, instituição) sem os espaços de preenchimento nas pontas.
+
 ## [0.3.3] - 2026-11-07
 
 ### Corrigido
