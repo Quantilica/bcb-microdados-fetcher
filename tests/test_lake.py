@@ -76,8 +76,11 @@ def test_convert_estban_long_format(tmp_path: Path) -> None:
         "ESTBAN (Documento 4500) por municipio\n"
         "Data de geracao dos dados: 2024-08-31\n"
         "#DATA_BASE;CNPJ;NOME_INSTITUICAO;CODMUN;MUNICIPIO;UF;CODMUN_IBGE;"
-        "VERBETE_110_DISPONIBILIDADES;461+467+468_OUTRAS\n"
-        "202406;00000000;BANCO DO BRASIL;7388;SAO PAULO;SP;3550308;50000;12000\n"
+        "VERBETE_110_DISPONIBILIDADES;461+467+468_OUTRAS;"
+        "VERBETE_141_CORRESPONDENTES_NO_EXTERIOR + VERBETE_142_CORRESPONDENTES_NO_PAIS;"
+        "VERBETE_144_COBRANCA_EM_TRANSITO + VERBETE_145_ORDENS_DE_PAGAMENTO\t"
+        "+ VERBETE_146_VAL_LIGADAS_E_TERC_EM_TRANSITO\n"
+        "202406;00000000;BANCO DO BRASIL;7388;SAO PAULO;SP;3550308;50000;12000;7;9\n"
     )
     zip_mun = raw_dir / "202406_ESTBAN@20261101.zip"
     with zipfile.ZipFile(zip_mun, "w") as zf:
@@ -106,9 +109,17 @@ def test_convert_estban_long_format(tmp_path: Path) -> None:
     assert not errors_mun, f"check_dataset errors mun: {errors_mun}"
     (part_mun,) = list((ds_mun / "ano=2024" / "mes=6").glob("*.parquet"))
     df_mun = pl.read_parquet(part_mun)
-    assert df_mun.height == 2
-    assert set(df_mun["verbete_codigo"].to_list()) == {"110", "461+467+468"}
-    assert df_mun["valor"].to_list() == [50000, 12000]
+    assert df_mun.height == 4
+    assert df_mun["verbete_codigo"].to_list() == [
+        "110",
+        "461+467+468",
+        "141+142",
+        "144+145+146",
+    ]
+    assert df_mun["verbete_nome"][2] == (
+        "correspondentes_no_exterior+correspondentes_no_pais"
+    )
+    assert df_mun["valor"].to_list() == [50000, 12000, 7, 9]
     assert df_mun.schema["cnpj"] == pl.String
     assert df_mun["cnpj"][0] == "00000000"
 

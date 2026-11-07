@@ -5,6 +5,15 @@ Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [Não lançado]
+
+### Corrigido
+- ESTBAN: verbetes compostos, publicados pelo BCB como uma coluna só
+  (`VERBETE_141_... + VERBETE_142_...`), saíam com `verbete_codigo` igual ao primeiro código
+  (`141`) e o restante do cabeçalho em `verbete_nome`. Agora o código traz todos os verbetes
+  da soma (`141+142`) e o nome traz os nomes de cada um, separados por `+`. Os valores não
+  mudam.
+
 ## [0.3.2] - 2026-11-07
 
 ### Corrigido

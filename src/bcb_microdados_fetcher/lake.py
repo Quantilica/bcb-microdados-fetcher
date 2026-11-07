@@ -54,6 +54,25 @@ def _norm_col(col_name: str) -> str:
     return re.sub(r"[^a-z0-9+]+", "_", s.lower()).strip("_")
 
 
+def _parse_verbete(col_str: str) -> tuple[str, str]:
+    """Separa codigo e nome de uma coluna de verbete ESTBAN ja normalizada.
+
+    "verbete_110_disponibilidades" -> ("110", "disponibilidades")
+    "461+467+468_outras" -> ("461+467+468", "outras")
+    "verbete_141_corresp_exterior_+_verbete_142_corresp_pais"
+        -> ("141+142", "corresp_exterior+corresp_pais")
+    """
+    codigos, nomes = [], []
+    for parte in col_str.split("+"):
+        m = re.fullmatch(r"_*(?:verbete_)?(\d{3})(?:_(.*?))?_*", parte)
+        if not m:
+            return col_str, ""
+        codigos.append(m.group(1))
+        if m.group(2):
+            nomes.append(m.group(2))
+    return "+".join(codigos), "+".join(nomes)
+
+
 logger = logging.getLogger(__name__)
 
 # Encoding declarado por dataset (igual em todos os membros do ZIP). Decodificacao
@@ -557,17 +576,7 @@ class BcbMicrodadosLakeConverter:
                     partitions = {"ano": ano, "mes": mes}
 
                     if verbete_cols:
-                        # "verbete_110_disponibilidades" -> ("110", "disponibilidades")
-                        # "461+467+468_outras" -> ("461+467+468", "outras")
-                        def parse_verbete(col_str: str) -> tuple[str, str]:
-                            m = re.search(
-                                r"(?:verbete_)?(\d{3}(?:\+\d{3})*)(?:_(.*))?", col_str
-                            )
-                            if m:
-                                return m.group(1), m.group(2) or ""
-                            return col_str, ""
-
-                        parsed = {v: parse_verbete(v) for v in verbete_cols}
+                        parsed = {v: _parse_verbete(v) for v in verbete_cols}
                         lf_long = lf.unpivot(
                             index=id_cols,
                             on=verbete_cols,
