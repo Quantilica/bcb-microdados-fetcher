@@ -346,6 +346,25 @@ def test_cosif_conglomerados_largura_fixa(tmp_path: Path) -> None:
     assert df["saldo"].to_list() == [363577595065.18, -5840912.56]
 
 
+def test_cosif_marcador_sem_dados_nao_vira_linha(tmp_path: Path) -> None:
+    raw = tmp_path / "raw" / "cosif"
+    raw.mkdir(parents=True)
+    csv = (
+        "Balancete Patrimonial\nx\ny\n"
+        "DATA;CNPJ;NOME INSTITUICAO;ATRIBUTO;DOCUMENTO;CONTA;NOME CONTA;SALDO\n"
+        "200901 ******** NAO EXISTE DADOS PARA ESTE SEGMENTO DATA"
+        "******************** H      \r\n"
+    )
+    with zipfile.ZipFile(raw / "cosif_consorcios_2009-01@20230509.zip", "w") as zf:
+        zf.writestr("200901CONSORCIOS.CSV", csv.encode("cp1252"))
+    lake = tmp_path / "lake"
+    lake.mkdir()
+    res = converter.convert(tmp_path / "raw", lake)
+    assert not res.errors
+    assert res.converted == 0
+    assert not list((lake / "bcb-microdados" / "cosif").rglob("*.parquet"))
+
+
 def test_scr_byte_invalido_vira_erro_e_nao_substitui(tmp_path: Path) -> None:
     raw = tmp_path / "raw" / "scr"
     raw.mkdir(parents=True)

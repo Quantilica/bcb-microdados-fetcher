@@ -669,7 +669,12 @@ class BcbMicrodadosLakeConverter:
 
             segmento = _identify_cosif_segmento(name)
             if "data_base" in cols:
-                ano, mes = _extract_year_month(_first_value(lf, "data_base"))
+                primeiro = _first_value(lf, "data_base")
+                # Marcador de mes sem dados (consorcios 2009-2010): uma linha so,
+                # "200901 **** NAO EXISTE DADOS PARA ESTE SEGMENTO DATA**** H".
+                if "NAO EXISTE DADOS" in str(primeiro).upper():
+                    return None
+                ano, mes = _extract_year_month(primeiro)
             else:
                 ano, mes = _extract_year_month(name)
 
