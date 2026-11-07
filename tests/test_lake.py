@@ -76,11 +76,13 @@ def test_convert_estban_long_format(tmp_path: Path) -> None:
         "ESTBAN (Documento 4500) por municipio\n"
         "Data de geracao dos dados: 2024-08-31\n"
         "#DATA_BASE;CNPJ;NOME_INSTITUICAO;CODMUN;MUNICIPIO;UF;CODMUN_IBGE;"
+        "AGEN_ESPERADAS;AGEN_PROCESSADAS;"
         "VERBETE_110_DISPONIBILIDADES;461+467+468_OUTRAS;"
         "VERBETE_141_CORRESPONDENTES_NO_EXTERIOR + VERBETE_142_CORRESPONDENTES_NO_PAIS;"
         "VERBETE_144_COBRANCA_EM_TRANSITO + VERBETE_145_ORDENS_DE_PAGAMENTO\t"
         "+ VERBETE_146_VAL_LIGADAS_E_TERC_EM_TRANSITO\n"
-        "202406;00000000;BANCO DO BRASIL;7388;SAO PAULO;SP;3550308;50000;12000;7;9\n"
+        "202406;00000000;BANCO DO BRASIL;7388;SAO PAULO   ;SP;3550308;12;11;"
+        "50000;12000;7;9\n"
     )
     zip_mun = raw_dir / "202406_ESTBAN@20261101.zip"
     with zipfile.ZipFile(zip_mun, "w") as zf:
@@ -120,6 +122,11 @@ def test_convert_estban_long_format(tmp_path: Path) -> None:
         "correspondentes_no_exterior+correspondentes_no_pais"
     )
     assert df_mun["valor"].to_list() == [50000, 12000, 7, 9]
+    # contagem de agencias e atributo da linha, nao verbete
+    assert df_mun["agen_esperadas"].to_list() == [12] * 4
+    assert df_mun["agen_processadas"].to_list() == [11] * 4
+    assert df_mun["municipio"][0] == "SAO PAULO"
+    assert df_mun["moeda"].to_list() == ["R$"] * 4
     assert df_mun.schema["cnpj"] == pl.String
     assert df_mun["cnpj"][0] == "00000000"
 

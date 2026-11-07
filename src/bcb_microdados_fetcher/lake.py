@@ -556,6 +556,17 @@ class BcbMicrodadosLakeConverter:
                             .alias("agencia")
                         )
 
+                    # Texto com espacos de preenchimento ("COMERCINHO      ").
+                    lf = lf.with_columns(pl.col(pl.String).str.strip_chars())
+                    # Contagem de agencias (so no arquivo por municipio): atributo da
+                    # linha, nao verbete; sem isto viravam verbete_codigo "agen_*".
+                    agen_cols = [
+                        c for c in ("agen_esperadas", "agen_processadas") if c in cols
+                    ]
+                    if agen_cols:
+                        lf = lf.with_columns(
+                            pl.col(agen_cols).cast(pl.Int64, strict=False)
+                        )
                     dim_candidates = {
                         "data_base",
                         "cnpj",
@@ -565,6 +576,8 @@ class BcbMicrodadosLakeConverter:
                         "municipio",
                         "uf",
                         "codmun_ibge",
+                        "agen_esperadas",
+                        "agen_processadas",
                     }
                     id_cols = [c for c in cols if c in dim_candidates]
                     verbete_cols = [c for c in cols if c not in dim_candidates]
@@ -599,6 +612,7 @@ class BcbMicrodadosLakeConverter:
                             pl.col("valor_raw")
                             .cast(pl.Int64, strict=False)
                             .alias("valor"),
+                            pl.lit(moeda_for_date(ano, mes)).alias("moeda"),
                             pl.lit(ano).cast(pl.Int32).alias("ano"),
                             pl.lit(mes).cast(pl.Int32).alias("mes"),
                         ).drop(["verbete_col", "valor_raw"])
@@ -607,6 +621,7 @@ class BcbMicrodadosLakeConverter:
                             pl.lit("").alias("verbete_codigo"),
                             pl.lit("").alias("verbete_nome"),
                             pl.lit(None).cast(pl.Int64).alias("valor"),
+                            pl.lit(moeda_for_date(ano, mes)).alias("moeda"),
                             pl.lit(ano).cast(pl.Int32).alias("ano"),
                             pl.lit(mes).cast(pl.Int32).alias("mes"),
                         )
