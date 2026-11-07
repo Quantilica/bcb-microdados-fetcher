@@ -1,6 +1,6 @@
 [project]
 name = "bcb-microdados-fetcher"
-version = "0.3.1"
+version = "0.3.2"
 description = "Coletor e conversor Lake Hive de microdados do Banco Central (SCR, ESTBAN, COSIF)"
 readme = "README.md"
 authors = [

@@ -5,6 +5,14 @@ Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.3.2] - 2026-11-07
+
+### Corrigido
+- COSIF: os meses de consórcios sem dados (2009 e 2010) trazem só uma linha com o aviso
+  `NAO EXISTE DADOS PARA ESTE SEGMENTO`. Antes, essa linha virava um registro com `saldo`
+  nulo e fazia `data_base` e `documento` saírem como texto, o que tornava o esquema do
+  dataset incompatível entre partições. Agora esses arquivos não geram partição.
+
 ## [0.3.1] - 2026-11-06
 
 ### Corrigido
