@@ -5,6 +5,15 @@ Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.3.1] - 2026-11-06
+
+### Corrigido
+- COSIF, balancetes de conglomerados no layout de largura fixa (2007 a 2010 e parte de
+  1994): `saldo` saía como texto, porque o valor vem com espaço no lugar do sinal
+  (`" 0000363577595065,18"`), e o código do conglomerado (`COD.CONGLOMERADO`) saía como
+  inteiro, sem os zeros à esquerda. Agora `saldo` é numérico, `cod_congl` é texto e os
+  campos de texto não trazem mais os espaços de preenchimento.
+
 ## [0.3.0] - 2026-11-06
 
 ### Corrigido
