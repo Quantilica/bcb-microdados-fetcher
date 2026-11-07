@@ -1,0 +1,97 @@
+{
+  "fonte": "bcb-microdados",
+  "dataset": "scr_sub_regiao",
+  "gerado_em": "2026-11-07T21:19:42+00:00",
+  "particoes": [
+    "ano",
+    "mes"
+  ],
+  "colunas": [
+    {
+      "nome": "cliente",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "estado",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "sub_regiao",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "modalidade",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "risco",
+      "tipos": [
+        "large_string",
+        "null"
+      ]
+    },
+    {
+      "nome": "operacoes",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "carteira",
+      "tipos": [
+        "decimal128(20, 2)"
+      ]
+    },
+    {
+      "nome": "a_vencer_ate_90_dias",
+      "tipos": [
+        "decimal128(20, 2)"
+      ]
+    },
+    {
+      "nome": "a_vencer_de_91_a_360_dias",
+      "tipos": [
+        "decimal128(20, 2)"
+      ]
+    },
+    {
+      "nome": "a_vencer_de_361_a_1080_dias",
+      "tipos": [
+        "decimal128(20, 2)"
+      ]
+    },
+    {
+      "nome": "a_vencer_de_1081_a_1800_dias",
+      "tipos": [
+        "decimal128(20, 2)"
+      ]
+    },
+    {
+      "nome": "a_vencer_de_1801_a_5400_dias",
+      "tipos": [
+        "decimal128(20, 2)"
+      ]
+    },
+    {
+      "nome": "a_vencer_acima_de_5400_dias",
+      "tipos": [
+        "decimal128(20, 2)"
+      ]
+    },
+    {
+      "nome": "vencido_acima_de_15_dias",
+      "tipos": [
+        "decimal128(20, 2)"
+      ]
+    }
+  ],
+  "arquivos": 249
+}

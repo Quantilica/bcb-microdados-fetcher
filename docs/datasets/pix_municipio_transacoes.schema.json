@@ -1,0 +1,120 @@
+{
+  "fonte": "bcb-microdados",
+  "dataset": "pix_municipio_transacoes",
+  "gerado_em": "2026-11-07T21:19:42+00:00",
+  "particoes": [
+    "ano",
+    "mes"
+  ],
+  "colunas": [
+    {
+      "nome": "codigo_ibge",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "municipio",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "uf_ibge",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "estado",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "sigla_regiao",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "regiao",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "vl_pagador_pf",
+      "tipos": [
+        "decimal128(20, 2)"
+      ]
+    },
+    {
+      "nome": "qt_pagador_pf",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "vl_pagador_pj",
+      "tipos": [
+        "decimal128(20, 2)"
+      ]
+    },
+    {
+      "nome": "qt_pagador_pj",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "vl_recebedor_pf",
+      "tipos": [
+        "decimal128(20, 2)"
+      ]
+    },
+    {
+      "nome": "qt_recebedor_pf",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "vl_recebedor_pj",
+      "tipos": [
+        "decimal128(20, 2)"
+      ]
+    },
+    {
+      "nome": "qt_recebedor_pj",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "qt_pes_pagador_pf",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "qt_pes_pagador_pj",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "qt_pes_recebedor_pf",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "qt_pes_recebedor_pj",
+      "tipos": [
+        "int64"
+      ]
+    }
+  ],
+  "arquivos": 73
+}

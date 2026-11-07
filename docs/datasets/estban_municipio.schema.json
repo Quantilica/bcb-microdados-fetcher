@@ -1,0 +1,90 @@
+{
+  "fonte": "bcb-microdados",
+  "dataset": "estban_municipio",
+  "gerado_em": "2026-11-07T21:19:42+00:00",
+  "particoes": [
+    "ano",
+    "mes"
+  ],
+  "colunas": [
+    {
+      "nome": "data_base",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "uf",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "codmun",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "municipio",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "cnpj",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "nome_instituicao",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "agen_esperadas",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "agen_processadas",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "codmun_ibge",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "verbete_codigo",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "verbete_nome",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "valor",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "moeda",
+      "tipos": [
+        "large_string"
+      ]
+    }
+  ],
+  "arquivos": 1
+}

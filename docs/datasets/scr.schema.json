@@ -1,0 +1,162 @@
+{
+  "fonte": "bcb-microdados",
+  "dataset": "scr",
+  "gerado_em": "2026-11-07T21:19:12+00:00",
+  "particoes": [
+    "ano",
+    "mes"
+  ],
+  "colunas": [
+    {
+      "nome": "data_base",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "uf",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "segmento",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "cliente",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "cnae_ocupacao",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "porte",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "modalidade",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "submodalidade",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "origem",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "indexador",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "numero_de_operacoes",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "a_vencer_ate_90_dias",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "a_vencer_de_91_ate_360_dias",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "a_vencer_de_361_ate_1080_dias",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "a_vencer_de_1081_ate_1800_dias",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "a_vencer_de_1801_ate_5400_dias",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "a_vencer_acima_de_5400_dias",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "carteira_a_vencer",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "vencido_de_15_ate_90_dias",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "vencido_acima_de_90_dias",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "carteira_vencida",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "carteira_ativa",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "carteira_inadimplencia",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "ativo_problematico",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "sigilo",
+      "tipos": [
+        "bool"
+      ]
+    }
+  ],
+  "arquivos": 170
+}

@@ -1,0 +1,108 @@
+{
+  "fonte": "bcb-microdados",
+  "dataset": "cosif",
+  "gerado_em": "2026-11-07T21:19:12+00:00",
+  "particoes": [
+    "segmento",
+    "ano"
+  ],
+  "colunas": [
+    {
+      "nome": "data_base",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "documento",
+      "tipos": [
+        "int64"
+      ]
+    },
+    {
+      "nome": "cnpj",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "agencia",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "nome_instituicao",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "cod_congl",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "nome_congl",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "taxonomia",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "conta",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "nome_conta",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "saldo",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "moeda",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "plano",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "atributo",
+      "tipos": [
+        "large_string"
+      ]
+    },
+    {
+      "nome": "realizavel_ate_3m",
+      "tipos": [
+        "double"
+      ]
+    },
+    {
+      "nome": "realizavel_apos_3m",
+      "tipos": [
+        "double"
+      ]
+    }
+  ],
+  "arquivos": 2562
+}
