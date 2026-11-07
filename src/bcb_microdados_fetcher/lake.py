@@ -68,7 +68,15 @@ ENCODINGS = {
 # o CNPJ dos prudenciais traz codigo de conglomerado (C0085111) apos milhares de
 # linhas numericas, alem da janela de inferencia.
 _COSIF_TEXTO = {
-    c: pl.Utf8 for c in ("CNPJ", "AGENCIA", "COD_CONGL", "TAXONOMIA", "CONTA")
+    c: pl.Utf8
+    for c in (
+        "CNPJ",
+        "AGENCIA",
+        "COD_CONGL",
+        "COD.CONGLOMERADO",
+        "TAXONOMIA",
+        "CONTA",
+    )
 }
 _ESTBAN_TEXTO = {c: pl.Utf8 for c in ("CNPJ", "AGENCIA")}
 _CHUNK = 1 << 20
@@ -648,7 +656,16 @@ class BcbMicrodadosLakeConverter:
                 else:
                     col_map[c] = norm
             lf = lf.rename(col_map)
-            cols = lf.collect_schema().names()
+            schema = lf.collect_schema()
+            cols = schema.names()
+
+            # Layout de largura fixa (conglomerados 2007-2010): texto com espacos de
+            # preenchimento e SALDO com espaco no lugar do sinal (" 0000...,18").
+            lf = lf.with_columns(pl.col(pl.String).str.strip_chars())
+            if schema.get("saldo") == pl.String:
+                lf = lf.with_columns(
+                    pl.col("saldo").str.replace(",", ".", literal=True).cast(pl.Float64)
+                )
 
             segmento = _identify_cosif_segmento(name)
             if "data_base" in cols:

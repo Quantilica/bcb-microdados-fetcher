@@ -318,6 +318,34 @@ def test_cosif_prudencial_cnpj_alfanumerico_apos_inferencia(tmp_path: Path) -> N
     assert set(df["cnpj"].unique().to_list()) == {"00000000", "C0085111"}
 
 
+def test_cosif_conglomerados_largura_fixa(tmp_path: Path) -> None:
+    """Layout 2007-2010: COD.CONGLOMERADO, campos com espacos e saldo com sinal."""
+    raw = tmp_path / "raw" / "cosif"
+    raw.mkdir(parents=True)
+    csv = (
+        "Consolidado Financeiro (doc 4040)\nx\ny\n"
+        "DATA;COD.CONGLOMERADO;NOME CONGLOMERADO;ATRIBUTO;DOCUMENTO;CONTA;"
+        "NOME CONTA;SALDO\n"
+        "200901;00010045;BRADESCO     ;G;4040;0010000007;CIRCULANTE     ;"
+        " 0000363577595065,18\n"
+        "200901;00010045;BRADESCO     ;G;4040;0090900000;CONTROLE       ;"
+        "-0000000005840912,56\n"
+    )
+    with zipfile.ZipFile(raw / "cosif_conglomerados_2009-01@20230509.zip", "w") as zf:
+        zf.writestr("200901CONGLOMERADOS.CSV", csv.encode("cp1252"))
+    lake = tmp_path / "lake"
+    lake.mkdir()
+    res = converter.convert(tmp_path / "raw", lake)
+    assert not res.errors
+    df = _rows(lake / "bcb-microdados" / "cosif")
+    assert df.schema["cod_congl"] == pl.String
+    assert df.schema["saldo"] == pl.Float64
+    assert df["cod_congl"].to_list() == ["00010045", "00010045"]
+    assert df["nome_congl"][0] == "BRADESCO"
+    assert df["conta"].to_list() == ["10000007", "90900000"]
+    assert df["saldo"].to_list() == [363577595065.18, -5840912.56]
+
+
 def test_scr_byte_invalido_vira_erro_e_nao_substitui(tmp_path: Path) -> None:
     raw = tmp_path / "raw" / "scr"
     raw.mkdir(parents=True)
