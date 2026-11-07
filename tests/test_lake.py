@@ -109,6 +109,8 @@ def test_convert_estban_long_format(tmp_path: Path) -> None:
     assert df_mun.height == 2
     assert set(df_mun["verbete_codigo"].to_list()) == {"110", "461+467+468"}
     assert df_mun["valor"].to_list() == [50000, 12000]
+    assert df_mun.schema["cnpj"] == pl.String
+    assert df_mun["cnpj"][0] == "00000000"
 
     # Verify agência
     ds_ag = lake_dir / "bcb-microdados" / "estban_agencia"
@@ -117,6 +119,7 @@ def test_convert_estban_long_format(tmp_path: Path) -> None:
     (part_ag,) = list((ds_ag / "ano=2024" / "mes=6").glob("*.parquet"))
     df_ag = pl.read_parquet(part_ag)
     assert df_ag["agencia"][0] == "00000000517569"
+    assert df_ag["cnpj"][0] == "00000000"
 
 
 def test_convert_cosif_eras_and_plans(tmp_path: Path) -> None:
@@ -283,6 +286,36 @@ def test_cosif_zip_tres_membros_mesma_particao(tmp_path: Path) -> None:
     df = _rows(lake / "bcb-microdados" / "cosif")
     assert df.height == 3
     assert "BANCO A\xc7\xc3O" in df["nome_instituicao"].to_list()
+
+
+def test_cosif_prudencial_cnpj_alfanumerico_apos_inferencia(tmp_path: Path) -> None:
+    """CNPJ com codigo de conglomerado depois das 5.000 linhas da inferencia."""
+    raw = tmp_path / "raw" / "cosif"
+    raw.mkdir(parents=True)
+    linha = (
+        "202606;4060;{cnpj};;{nome};{congl};X - PRUDENCIAL;"
+        "CONGLOMERADO PRUDENCIAL;1000000009;Ativo;1,50\n"
+    )
+    csv = (
+        "Balancete/Balanco Geral Consolidado Prudencial\nx\ny\n"
+        "#DATA_BASE;DOCUMENTO;CNPJ;AGENCIA;NOME_INSTITUICAO;COD_CONGL;NOME_CONGL;"
+        "TAXONOMIA;CONTA;NOME_CONTA;SALDO\n"
+        + linha.format(cnpj="00000000", nome="BCO DO BRASIL S.A.", congl="C0080329")
+        * 6000
+        + linha.format(cnpj="C0085111", nome="", congl="C0085111")
+    )
+    with zipfile.ZipFile(raw / "cosif_prudencial_2026-06@20261103.zip", "w") as zf:
+        zf.writestr("202606BLOPRUDENCIAL.CSV", csv.encode("cp1252"))
+    lake = tmp_path / "lake"
+    lake.mkdir()
+    res = converter.convert(tmp_path / "raw", lake)
+    assert not res.errors
+    assert res.converted == 1
+    df = _rows(lake / "bcb-microdados" / "cosif" / "segmento=prudencial")
+    assert df.height == 6001
+    assert df.schema["cnpj"] == pl.String
+    assert df.schema["cod_congl"] == pl.String
+    assert set(df["cnpj"].unique().to_list()) == {"00000000", "C0085111"}
 
 
 def test_scr_byte_invalido_vira_erro_e_nao_substitui(tmp_path: Path) -> None:

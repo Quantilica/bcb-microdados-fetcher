@@ -64,6 +64,13 @@ ENCODINGS = {
     "estban_agencia": "latin-1",
     "cosif": "cp1252",
 }
+# Identificadores sempre como texto: zeros a esquerda importam (BB = 00000000) e
+# o CNPJ dos prudenciais traz codigo de conglomerado (C0085111) apos milhares de
+# linhas numericas, alem da janela de inferencia.
+_COSIF_TEXTO = {
+    c: pl.Utf8 for c in ("CNPJ", "AGENCIA", "COD_CONGL", "TAXONOMIA", "CONTA")
+}
+_ESTBAN_TEXTO = {c: pl.Utf8 for c in ("CNPJ", "AGENCIA")}
 _CHUNK = 1 << 20
 
 
@@ -141,13 +148,18 @@ def _preamble_skip(csv_path: Path, prefixes: tuple[str, ...]) -> int:
 
 
 def _scan(
-    csv_path: Path, *, skip_rows: int = 0, decimal_comma: bool = False
+    csv_path: Path,
+    *,
+    skip_rows: int = 0,
+    decimal_comma: bool = False,
+    schema_overrides: dict[str, Any] | None = None,
 ) -> pl.LazyFrame:
     return pl.scan_csv(
         csv_path,
         separator=";",
         skip_rows=skip_rows,
         decimal_comma=decimal_comma,
+        schema_overrides=schema_overrides,
         infer_schema_length=5000,
         encoding="utf8",
     )
@@ -488,7 +500,7 @@ class BcbMicrodadosLakeConverter:
                     skip = _preamble_skip(
                         csv_path, ("#DATA_BASE", "#DATA", "DATA_BASE", "#")
                     )
-                    lf = _scan(csv_path, skip_rows=skip)
+                    lf = _scan(csv_path, skip_rows=skip, schema_overrides=_ESTBAN_TEXTO)
                     if lf.head(1).collect().height == 0:
                         continue
                     lf = lf.rename(
@@ -611,7 +623,12 @@ class BcbMicrodadosLakeConverter:
             skip = _preamble_skip(
                 csv_path, ("#DATA_BASE", "#DATA", "DATA;", "DATA_BASE", "#")
             )
-            lf = _scan(csv_path, skip_rows=skip, decimal_comma=True)
+            lf = _scan(
+                csv_path,
+                skip_rows=skip,
+                decimal_comma=True,
+                schema_overrides=_COSIF_TEXTO,
+            )
             if lf.head(1).collect().height == 0:
                 return None
 
