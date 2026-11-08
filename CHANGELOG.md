@@ -7,6 +7,8 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ## [Não lançado]
 
+## [0.4.1] - 2026-11-08
+
 ### Corrigido
 - Pix e SCR por sub-região: um mês que a API do Olinda ainda não publicou (`value` vazio) é pulado com um aviso, em vez de contar como erro e fazer a construção do lake falhar.
 
