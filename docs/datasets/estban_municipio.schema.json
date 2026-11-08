@@ -1,7 +1,7 @@
 {
   "fonte": "bcb-microdados",
   "dataset": "estban_municipio",
-  "gerado_em": "2026-11-07T21:19:42+00:00",
+  "gerado_em": "2026-11-08T19:53:55+00:00",
   "particoes": [
     "ano",
     "mes"
@@ -86,5 +86,5 @@
       ]
     }
   ],
-  "arquivos": 1
+  "arquivos": 456
 }
