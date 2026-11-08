@@ -7,6 +7,11 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ## [Não lançado]
 
+## [0.4.0] - 2026-11-08
+
+### Adicionado
+- Documentação dos dados em `docs/`, conforme a norma de documentação dos dados: página, dicionário de todas as variáveis e esquema de referência para cada um dos seis datasets. Um teste a verifica.
+
 ### Alterado
 - ESTBAN: nova coluna `moeda` com o padrão monetário da data-base (`Cz$` até 1988-12, `NCz$`, `Cr$`, `CR$` e `R$` a partir de 1994-07), como no COSIF. Os valores continuam na moeda da época, sem conversão.
 
