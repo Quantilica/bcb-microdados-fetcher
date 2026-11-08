@@ -2,12 +2,9 @@
 
 from pathlib import Path
 
-import pytest
+from quantilica.core import docs
 
-docs = pytest.importorskip("quantilica.core.docs")
-pytest.importorskip("yaml")
-
-from bcb_microdados_fetcher.lake import converter  # noqa: E402
+from bcb_microdados_fetcher.lake import converter
 
 
 def test_documentacao_dos_dados() -> None:
