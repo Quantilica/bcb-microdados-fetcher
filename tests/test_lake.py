@@ -491,10 +491,18 @@ def test_scr_sub_regiao_risco_descontinuado_fica_nulo_ou_nd(tmp_path: Path) -> N
     assert set(df["risco"].to_list()) == {"N/D"}
 
 
-def test_olinda_json_empty_or_multi_month_is_counted_error(tmp_path: Path) -> None:
+def test_olinda_json_vazio_e_pulado_sem_erro(tmp_path: Path) -> None:
+    raw = tmp_path / "raw" / "scr_sub_regiao"
+    raw.mkdir(parents=True)
+    (raw / "scr_sub_regiao_2026-10.json").write_text('{"value": []}')
+    res = converter.convert(tmp_path / "raw", tmp_path / "lake")
+    assert (res.converted, res.skipped, res.errors) == (0, 1, [])
+
+
+def test_olinda_json_sem_value_ou_multi_mes_e_erro(tmp_path: Path) -> None:
     raw = tmp_path / "raw" / "pix_municipio_transacoes"
     raw.mkdir(parents=True)
-    (raw / "pix_municipio_transacoes_2025-09.json").write_text('{"value": []}')
+    (raw / "pix_municipio_transacoes_2025-09.json").write_text("{}")
     res = converter.convert(tmp_path / "raw", tmp_path / "lake")
     assert res.converted == 0 and len(res.errors) == 1
     assert "sem linhas" in res.errors[0]

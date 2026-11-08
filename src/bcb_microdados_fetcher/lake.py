@@ -268,6 +268,12 @@ def _identify_cosif_segmento(filename: str) -> str:
 _MONEY = pl.Decimal(precision=20, scale=2)
 
 
+def _olinda_vazio(path: Path) -> bool:
+    """True se o JSON é ``{"value": []}``: o BCB ainda não publicou o mês."""
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return isinstance(payload, dict) and payload.get("value") == []
+
+
 def _read_olinda(path: Path, dataset: str) -> tuple[pl.DataFrame, dict[str, int]]:
     """Lê o JSON ``{"value": [...]}`` de uma função OData e tipa as colunas.
 
@@ -451,6 +457,14 @@ class BcbMicrodadosLakeConverter:
     ) -> None:
         """Converte o JSON mensal de uma função OData do Olinda."""
         try:
+            if _olinda_vazio(raw_file):
+                logger.warning(
+                    "%s %s: a API ainda não publicou este mês (value vazio); pulado",
+                    dataset,
+                    raw_file.name,
+                )
+                res.skipped += 1
+                return
             df, partitions = _read_olinda(raw_file, dataset)
             if writer.is_current(raw_file, partitions=partitions):
                 res.skipped += 1
