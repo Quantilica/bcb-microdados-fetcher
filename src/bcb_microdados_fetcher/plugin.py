@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from quantilica.cli.sdk import FetcherApp, make_resolve_groups
+from quantilica.core.registry import FetcherInfo
 from quantilica.core.sync import FreshnessPolicy
 
 from .catalog import GROUP_ALIASES, GROUPS, list_datasets
@@ -27,6 +28,16 @@ def path_builder(
 fetcher = FetcherApp(
     name="bcb-microdados",
     help="Microdados do Banco Central (SCR, ESTBAN, COSIF)",
+    info=FetcherInfo(
+        id="bcb-microdados",
+        nome="Banco Central - Microdados (SCR, ESTBAN, COSIF, Pix)",
+        aliases=("bcb_microdados",),
+        orgao="Banco Central do Brasil (BCB)",
+        licenca="Open Data Commons Open Database License (ODbL)",
+        homepage="https://dadosabertos.bcb.gov.br/",
+        cadencia="monthly",
+        dominio="financas",
+    ),
     groups_dict=GROUPS,
     aliases_dict=GROUP_ALIASES,
     list_datasets=list_datasets,
