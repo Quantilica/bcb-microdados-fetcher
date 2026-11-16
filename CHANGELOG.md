@@ -7,6 +7,8 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ## [Não lançado]
 
+
+## [0.6.0] - 2026-11-16
 ### Alterado
 - **Quebra de layout no lake (só o dataset `cosif`): um Parquet por segmento e mês, em `segmento=/ano=/mes=`.** Os outros datasets não mudam. Antes e depois, em `bcb-microdados/cosif/`:
   - antes: `segmento=bancos/ano=2024/cosif_bancos_2024-12__202412bancos.parquet` (um Parquet por arquivo CSV de cada ZIP, todos os meses do ano na mesma pasta);
