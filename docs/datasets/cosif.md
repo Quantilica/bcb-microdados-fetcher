@@ -12,7 +12,7 @@ dataset:
   unidade: saldo de uma conta Cosif de uma instituição (ou conglomerado) em um documento e data-base
   granularidade: {espacial: instituição ou conglomerado (sem recorte geográfico), temporal: mês}
   formato_bruto: ZIP com um CSV por segmento e mês, separado por ponto e vírgula, codificação cp1252, vírgula decimal; layout de largura fixa em parte dos conglomerados (2007 a 2010)
-  lake: {estado: convertido, particoes: [segmento, ano], chave: [data_base, documento, cnpj, cod_congl, conta], colunas: 16}
+  lake: {estado: convertido, particoes: [segmento, ano, mes], chave: [data_base, documento, cnpj, cod_congl, conta], colunas: 17}
   unidades_de_medida:
     saldo: moeda da data-base (coluna moeda), com centavos
     realizavel_ate_3m: moeda da data-base (coluna moeda), com centavos
@@ -62,9 +62,9 @@ Este dataset reúne os oito segmentos publicados (bancos, cooperativas, consórc
 | Granularidade | espacial: instituição ou conglomerado (sem recorte geográfico); temporal: mês |
 | Formato bruto | ZIP com um CSV por segmento e mês, separado por ponto e vírgula, codificação cp1252, vírgula decimal; layout de largura fixa em parte dos conglomerados (2007 a 2010) |
 | Estado no lake | convertido |
-| Partições | `segmento`, `ano` |
+| Partições | `segmento`, `ano`, `mes` |
 | Chave | `data_base`, `documento`, `cnpj`, `cod_congl`, `conta` |
-| Colunas | 16 |
+| Colunas | 17 |
 | Unidades de medida | `saldo`: moeda da data-base (coluna moeda), com centavos; `realizavel_ate_3m`: moeda da data-base (coluna moeda), com centavos; `realizavel_apos_3m`: moeda da data-base (coluna moeda), com centavos; `data_base`: AAAAMM; `documento`: código do documento no Catálogo de Documentos (Cadoc) |
 | Dados pessoais | nenhum |
 | Eras | 1989-01: saldos em cruzado novo (NCz$); antes, cruzado (Cz$); 1990-03: saldos em cruzeiro (Cr$); 1993-08: saldos em cruzeiro real (CR$); 1994-07: saldos em real (R$); 1994-08: aparece a coluna ATRIBUTO (tipo de instituição no Unicad), publicada até 2010-09; 2013-06: começa o segmento combinados (combinados cooperativos); 2014-01: começa o segmento prudencial (conglomerados prudenciais, documentos 4060 e 4066); 2017-01: colunas de realizável até e após 3 meses, publicadas só de 2017-01 a 2017-03; 2017-06: TAXONOMIA passa a trazer também códigos numéricos (5.007, 5.002.014); 2017-10: o segmento sociedades deixa de ser publicado (último mês: 2017-09); 2022-01: o segmento conglomerados (documentos 4040 e 4046) deixa de ser publicado (último mês: 2021-12); 2025-01: novo plano de contas Cosif: contas de 10 dígitos (coluna plano = cosif_2025); 2025-03: consórcios passam a publicar também o documento 4110 |
@@ -119,17 +119,19 @@ A descrição de cada documento está no Catálogo de Documentos (Cadoc) e no ca
 | `atributo` | `ATRIBUTO` | texto | Tipo de instituição no Unicad, uma letra | `A`–`W` | 1994-08 a 2010-09 |
 | `realizavel_ate_3m` | coluna de realizável até 3 meses | real (float64) | Parcela do saldo realizável em até 3 meses | moeda da data-base | 2017-01 a 2017-03 |
 | `realizavel_apos_3m` | coluna de realizável após 3 meses | real (float64) | Parcela do saldo realizável após 3 meses | moeda da data-base | 2017-01 a 2017-03 |
+| `_origem` | — (conversor) | texto | Arquivo de origem da linha: o CSV do ZIP, na forma da chave do arquivo (`cosif_bancos_2024-12__202412bancos`); o rodapé do Parquet lista os arquivos do mês | — | todo (depois da reconversão) |
 | `segmento` | — (partição) | texto | Segmento do arquivo de origem | `bancos`, `cooperativas`, `consorcios`, `sociedades`, `conglomerados`, `prudencial`, `combinados`, `liquidacao` | todo |
 | `ano` | — (partição) | inteiro | Ano da data-base | — | todo |
+| `mes` | — (partição) | texto | Mês da data-base, com 2 dígitos | `01` a `12` | todo |
 
 ## No lake
 
-- Dataset `bcb-microdados/cosif`, particionado por `segmento` e `ano`; um Parquet por arquivo de origem.
+- Dataset `bcb-microdados/cosif`, particionado por `segmento`, `ano` (inteiro) e `mes` (texto de 2 dígitos); um Parquet por segmento e mês (`cosif_<segmento>_<AAAAMM>.parquet`), que reúne todos os arquivos CSV do mês no ZIP de origem. A coluna `_origem` traz o arquivo de origem de cada linha e o rodapé do Parquet lista os arquivos (`quantilica.members`, com sha256 e linhas de cada um). Se os arquivos do mesmo segmento tiverem colunas diferentes, cada conjunto de colunas vai para o seu Parquet (`cosif_<segmento>_<AAAAMM>-v2.parquet`...).
 - Os nomes de coluna são normalizados (minúsculas, sem acento). Variantes antigas do cabeçalho são unificadas: `DATA` vira `data_base` e `COD.CONGLOMERADO` vira `cod_congl`, entre outras.
 - `cnpj`, `agencia`, `cod_congl`, `taxonomia` e `conta` são sempre texto: preservam zeros à esquerda (o Banco do Brasil é `00000000`) e os códigos de conglomerado.
 - No plano de 1988, conta com 10 dígitos começando por `00` perde os dois zeros iniciais, para ficar com os 8 dígitos do plano.
 - Textos perdem os espaços de preenchimento; no layout de largura fixa, o saldo com espaço no lugar do sinal é convertido para número.
-- São acrescentadas `moeda`, `plano`, `segmento` e `ano`.
+- São acrescentadas `moeda`, `plano`, `_origem` e as colunas de partição `segmento`, `ano` e `mes`.
 - Ficam de fora os arquivos de mês sem dados de consórcios (2009 e 2010).
 
 ## Cuidados de uso

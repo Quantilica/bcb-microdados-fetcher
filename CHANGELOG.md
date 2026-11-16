@@ -7,7 +7,21 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ## [Não lançado]
 
+### Alterado
+- **Quebra de layout no lake (só o dataset `cosif`): um Parquet por segmento e mês, em `segmento=/ano=/mes=`.** Os outros datasets não mudam. Antes e depois, em `bcb-microdados/cosif/`:
+  - antes: `segmento=bancos/ano=2024/cosif_bancos_2024-12__202412bancos.parquet` (um Parquet por arquivo CSV de cada ZIP, todos os meses do ano na mesma pasta);
+  - depois: `segmento=bancos/ano=2024/mes=12/cosif_bancos_202412.parquet` (um por segmento e mês, escrito por `LakeWriter.write_group`; `mes` é texto de 2 dígitos).
+  - Os CSVs do mesmo segmento e mês no ZIP, quando têm as mesmas colunas, viram um Parquet só. Se as colunas diferem entre eles, cada conjunto de colunas fica no seu Parquet (`cosif_<segmento>_<AAAAMM>-v2.parquet`...), sem misturar esquemas, e um aviso é registrado no log.
+  - Cada linha ganha a coluna `_origem` (o arquivo de origem) e o rodapé do Parquet lista os arquivos (`quantilica.members`, com sha256 e linhas de cada um). `segmento` e `ano` continuam vindo das pastas; `mes` é nova.
+  - O segmento e o mês de cada arquivo vêm do início dele (a primeira linha de dados, como antes), lido antes de decidir o grupo: um ZIP que já está no lake não é decodificado de novo. Um arquivo que mudou reescreve o Parquet do mês, mas só ele é decodificado.
+  - Na reconversão, o Parquet antigo de cada arquivo (`segmento=X/ano=AAAA/<chave>.parquet`) é apagado depois que o do mês é publicado, só se for deste dataset e não agrupado; um Parquet antigo cujo ZIP já não está no bruto fica no lake (o grupo não tem as linhas dele) e deve ser apagado à mão. O grupo de um mês é a lista completa de arquivos do bruto: um ZIP que sai do bruto sai do Parquet. Se algum ZIP não puder ser lido, nada é descartado nessa execução.
+  - `ConvertResult.converted` e `skipped` continuam contando arquivos CSV; cada mensagem de erro do cosif começa por `Erro ao converter COSIF <grupo>` (ou o arquivo, se o erro for na leitura).
+- O conversor registra `contract_version` (1) e `converter_version` ("1") em cada arquivo do grupo; mudar a leitura do cosif e subir uma delas reconverte o mês.
+- Exige `quantilica-analytics>=0.12.0` no extra `analysis` (`write_group`).
+- Documentação dos dados do `cosif`: partições, coluna `mes` e `_origem`.
+
 ### Adicionado
+- Testes de equivalência do agrupamento do cosif: o conteúdo do lake (linhas, colunas e tipos, hash do conteúdo ordenado por segmento, mês e esquema) é igual ao do conversor de um Parquet por arquivo (`tests/golden/lake_antes_do_agrupamento.json`, gerado antes da mudança), mais segunda execução sem reescrita nem decodificação, migração do layout antigo sem linhas duplicadas, `lake_audit` limpo, mudança de esquema, ZIP ilegível e `profile_from_lake` com período mensal.
 - Testes: identidade do registro conferida.
 
 ### Corrigido

@@ -4,7 +4,8 @@
   "gerado_em": "2026-11-07T21:19:12+00:00",
   "particoes": [
     "segmento",
-    "ano"
+    "ano",
+    "mes"
   ],
   "colunas": [
     {
@@ -101,6 +102,12 @@
       "nome": "realizavel_apos_3m",
       "tipos": [
         "double"
+      ]
+    },
+    {
+      "nome": "_origem",
+      "tipos": [
+        "string"
       ]
     }
   ],
