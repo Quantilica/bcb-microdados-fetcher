@@ -288,8 +288,11 @@ def test_migracao_nao_apaga_o_que_o_grupo_nao_cobre(raw: Path, tmp_path: Path) -
 
     res = converter.convert(raw, lake)
 
-    assert not res.errors
-    assert orfao.exists() and alheio.exists()  # a auditoria é quem acusa o resíduo
+    # Nada é apagado; o que sobrou do layout antigo é listado como erro, com o caminho.
+    assert len(res.errors) == 2
+    assert any(str(orfao) in e for e in res.errors)
+    assert any(str(alheio) in e for e in res.errors)
+    assert orfao.exists() and alheio.exists()
     # Os três membros de 2024-12 saíram.
     assert sorted(p.name for p in pasta.glob("*.parquet")) == sorted(
         [orfao.name, alheio.name]
@@ -369,3 +372,41 @@ def test_force_reescreve_tudo_sem_duplicar(raw: Path, tmp_path: Path) -> None:
     assert not res.errors and res.converted == N_MEMBROS and res.skipped == 0
     assert len(_parquets(lake)) == 8
     assert scan_dataset(_dataset(lake)).collect().height == linhas
+
+
+def test_membro_com_mais_de_uma_data_base_e_erro_e_nao_grava_no_mes_da_primeira_linha(
+    raw: Path, tmp_path: Path
+) -> None:
+    ruim = _l11("202412", 3, cnpj0=700) + "".join(
+        f"202501;4010;{800 + i:08d};0001;BANCO;0;N;0;1111222{i};CAIXA;1,50\n"
+        for i in range(2)
+    )
+    with zipfile.ZipFile(
+        raw / "cosif/cosif_liquidacao_2024-12@20261101.zip", "w"
+    ) as zf:
+        zf.writestr("202412LIQUIDACAO.csv", ruim.encode("cp1252"))
+    lake = tmp_path / "lake"
+
+    res = converter.convert(raw, lake)
+
+    assert len(res.errors) == 1
+    assert "202412LIQUIDACAO.csv" in res.errors[0]
+    assert "mais de uma data_base" in res.errors[0] and "202501" in res.errors[0]
+    assert not list(_dataset(lake).glob("segmento=liquidacao/**/*.parquet"))
+    # o resto converteu normalmente
+    assert len(_parquets(lake)) == 8
+
+
+def test_zip_vazio_ou_html_e_erro_e_nao_e_ignorado(raw: Path, tmp_path: Path) -> None:
+    (raw / "cosif/cosif_bancos_2030-01@20261101.zip").write_bytes(b"")
+    (raw / "cosif/cosif_bancos_2030-02@20261101.zip").write_bytes(
+        b"<!DOCTYPE html><html><body>nao e um zip</body></html>"
+    )
+    lake = tmp_path / "lake"
+
+    res = converter.convert(raw, lake)
+
+    assert len(res.errors) == 2
+    assert any("2030-01" in e and "0 bytes" in e for e in res.errors)
+    assert any("2030-02" in e and "PK" in e for e in res.errors)
+    assert len(_parquets(lake)) == 8  # os demais meses foram convertidos

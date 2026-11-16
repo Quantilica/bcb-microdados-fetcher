@@ -167,13 +167,22 @@ def _member_as_utf8(path: Path, name: str | None, encoding: str) -> Iterator[Pat
         yield dest
 
 
-def _iter_members(raw_file: Path) -> list[str | None]:
-    """Membros: nomes do ZIP, ``[None]`` para CSV solto, ``[]`` se ignorado."""
+def _iter_members(raw_file: Path, *, require_zip: bool = False) -> list[str | None]:
+    """Membros: nomes do ZIP, ``[None]`` para CSV solto, ``[]`` se ignorado.
+
+    Com ``require_zip``, um arquivo ``.zip`` sem a assinatura ``PK`` (vazio, ou uma
+    página HTML baixada no lugar) é ``BadZipFile``, não um arquivo ignorado.
+    """
     names = _csv_member_names(raw_file)
     if names is not None:
         return list(names)
     if raw_file.suffix.lower() in (".csv", ".txt"):
         return [None]
+    if require_zip and raw_file.suffix.lower() == ".zip":
+        raise zipfile.BadZipFile(
+            f"{raw_file.name} nao tem a assinatura de ZIP (PK): "
+            f"{raw_file.stat().st_size} bytes, vazio ou nao e um ZIP"
+        )
     return []
 
 
@@ -468,6 +477,8 @@ class BcbMicrodadosLakeConverter:
         # O cosif e agrupado por segmento e mes: so depois de ver todos os brutos.
         if cosif_files:
             _convert_cosif_groups(cosif_files, writers["cosif"], res)
+        if "cosif" in writers:
+            _report_legacy_cosif(writers["cosif"].dataset_dir, res)
 
         return res
 
@@ -919,7 +930,7 @@ def _convert_cosif_groups(
     inspection_failed = False
     for raw_file in sorted(raw_files):
         try:
-            names = _iter_members(raw_file)
+            names = _iter_members(raw_file, require_zip=True)
             digest = sha256_file(raw_file) if names else ""
         except (OSError, zipfile.BadZipFile) as exc:
             res.errors.append(f"COSIF {raw_file.name}: ZIP ilegivel: {exc}")
@@ -995,6 +1006,25 @@ def _convert_cosif_groups(
                 _drop_stale_groups(target, keep, "cosif")
 
 
+def _report_legacy_cosif(dataset_dir: Path, res: ConvertResult) -> None:
+    """Lista, em ``errors``, os Parquets do layout antigo que sobraram.
+
+    O layout anterior gravava ``segmento=X/ano=AAAA/<chave>.parquet`` direto na
+    pasta do ano. O que a migracao nao substituiu (ZIP fora do bruto visto, mes sem
+    dados, arquivo ilegivel ou de outro dataset, erro de leitura ou de gravacao) fica
+    no lake e e listado, com o caminho, para o operador decidir; nada e apagado.
+    """
+    if not dataset_dir.is_dir():
+        return
+    for path in sorted(dataset_dir.glob("segmento=*/ano=*/*.parquet")):
+        res.errors.append(
+            f"cosif: Parquet do layout antigo (um por arquivo de origem, fora de "
+            f"mes=) mantido; o ZIP de origem ({path.stem}) nao foi convertido nesta "
+            "execucao (ausente do bruto visto, sem dados ou com erro acima) ou o "
+            f"arquivo nao e deste dataset; apague a mao se for residuo: {path}"
+        )
+
+
 def _group_member(m: _CosifMember, stack: ExitStack) -> GroupMember:
     """Membro do grupo; o CSV so e decodificado se o membro tiver de ser escrito."""
 
@@ -1007,7 +1037,32 @@ def _group_member(m: _CosifMember, stack: ExitStack) -> GroupMember:
             raise ValueError(f"{m.shown}: sem linhas na conversao completa")
         if built[1] != m.info:
             raise ValueError(f"{m.shown}: segmento, mes ou colunas mudaram na leitura")
-        return built[0]
+        lf = built[0]
+        if "data_base" in m.info.colunas:
+            # Um membro e um mes: so a primeira linha define a pasta, entao as
+            # outras tem de concordar (senao o mes seria gravado na pasta errada).
+            esperado = f"{m.info.ano:04d}{m.info.mes:02d}"
+            meses = (
+                lf.select(
+                    pl.col("data_base")
+                    .cast(pl.String)
+                    .str.strip_chars()
+                    .str.slice(0, 6)
+                    .drop_nulls()
+                    .unique()
+                    .sort()
+                )
+                .collect()
+                .to_series()
+                .to_list()
+            )
+            if set(meses) != {esperado}:
+                raise ValueError(
+                    f"{m.shown}: mais de uma data_base no mesmo arquivo "
+                    f"({len(meses)} meses: {', '.join(meses[:6])}); a primeira "
+                    f"linha e de {esperado}. Arquivo nao gravado"
+                )
+        return lf
 
     return GroupMember(m.raw_file, data, key=m.key, sha256=m.sha256)
 
