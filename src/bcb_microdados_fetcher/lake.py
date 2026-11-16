@@ -11,13 +11,22 @@ import tempfile
 import unicodedata
 import zipfile
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 try:
     import polars as pl
-    from quantilica.analytics.lake import ConvertResult, LakeWriter
+    import pyarrow.parquet as pq
+    from quantilica.analytics.lake import (
+        META_MEMBERS,
+        ConvertResult,
+        GroupMember,
+        LakeWriter,
+        footer_from_metadata,
+    )
+    from quantilica.core.files import sha256_file
     from quantilica.core.lake import (
         DatasetDescriptor,
         composite_file_key,
@@ -83,6 +92,11 @@ ENCODINGS = {
     "estban_agencia": "latin-1",
     "cosif": "cp1252",
 }
+#: Particao do cosif: um Parquet por segmento e mes (``write_group``).
+COSIF_PARTITION_KEYS = ["segmento", "ano", "mes"]
+#: Versoes gravadas em cada membro do grupo; subir uma reconverte o cosif.
+COSIF_CONTRACT_VERSION = 1
+COSIF_CONVERTER_VERSION = "1"
 # Identificadores sempre como texto: zeros a esquerda importam (BB = 00000000) e
 # o CNPJ dos prudenciais traz codigo de conglomerado (C0085111) apos milhares de
 # linhas numericas, alem da janela de inferencia.
@@ -414,8 +428,8 @@ class BcbMicrodadosLakeConverter:
                     source_id=self.source_id,
                     dataset_id="cosif",
                     alias="cosif",
-                    partition_keys=["segmento", "ano"],
-                    partition_types=partition_types_for(["segmento", "ano"]),
+                    partition_keys=COSIF_PARTITION_KEYS,
+                    partition_types=partition_types_for(COSIF_PARTITION_KEYS),
                 ),
                 force=force,
             )
@@ -424,6 +438,7 @@ class BcbMicrodadosLakeConverter:
         all_raw_files = [f for f in input_path.rglob("*") if f.is_file()]
         active_files = select_current(all_raw_files)
 
+        cosif_files: list[Path] = []
         for raw_file in active_files:
             fname = raw_file.name.lower()
             parent = raw_file.parent.name.lower()
@@ -448,7 +463,11 @@ class BcbMicrodadosLakeConverter:
                 or any(m["sufixo"].lower() in fname for m in COSIF_SEGMENTOS.values())
             ):
                 if "cosif" in writers:
-                    self._convert_cosif(raw_file, writers["cosif"], res)
+                    cosif_files.append(raw_file)
+
+        # O cosif e agrupado por segmento e mes: so depois de ver todos os brutos.
+        if cosif_files:
+            _convert_cosif_groups(cosif_files, writers["cosif"], res)
 
         return res
 
@@ -660,88 +679,337 @@ class BcbMicrodadosLakeConverter:
                     f"Erro ao converter ESTBAN {shown} em {raw_file.name}: {exc}"
                 )
 
-    def _convert_cosif(
-        self, raw_file: Path, writer: LakeWriter, res: ConvertResult
-    ) -> None:
-        """Convert COSIF balancetes files into Lake Hive format."""
 
-        def build(csv_path: Path, name: str):
-            skip = _preamble_skip(
-                csv_path, ("#DATA_BASE", "#DATA", "DATA;", "DATA_BASE", "#")
-            )
-            lf = _scan(
-                csv_path,
-                skip_rows=skip,
-                decimal_comma=True,
-                schema_overrides=_COSIF_TEXTO,
-            )
-            if lf.head(1).collect().height == 0:
-                return None
+@dataclass(frozen=True)
+class CosifInfo:
+    """Onde um membro do cosif cai: segmento, mes e esquema (nomes das colunas)."""
 
-            col_map = {}
-            for c in lf.collect_schema().names():
-                norm = _norm_col(c.lstrip("#").strip())
-                if norm in ("data", "data_base"):
-                    col_map[c] = "data_base"
-                elif norm in ("nome_instituicao", "nomeinstituicao"):
-                    col_map[c] = "nome_instituicao"
-                elif norm in ("nome_conta", "nomeconta"):
-                    col_map[c] = "nome_conta"
-                elif norm in ("cod_congl", "cod_conglomerado"):
-                    col_map[c] = "cod_congl"
-                elif norm in ("nome_congl", "nome_conglomerado"):
-                    col_map[c] = "nome_congl"
-                else:
-                    col_map[c] = norm
-            lf = lf.rename(col_map)
-            schema = lf.collect_schema()
-            cols = schema.names()
+    segmento: str
+    ano: int
+    mes: int
+    colunas: tuple[str, ...]
 
-            # Layout de largura fixa (conglomerados 2007-2010): texto com espacos de
-            # preenchimento e SALDO com espaco no lugar do sinal (" 0000...,18").
-            lf = lf.with_columns(pl.col(pl.String).str.strip_chars())
-            if schema.get("saldo") == pl.String:
-                lf = lf.with_columns(
-                    pl.col("saldo").str.replace(",", ".", literal=True).cast(pl.Float64)
-                )
 
-            segmento = _identify_cosif_segmento(name)
-            if "data_base" in cols:
-                primeiro = _first_value(lf, "data_base")
-                # Marcador de mes sem dados (consorcios 2009-2010): uma linha so,
-                # "200901 **** NAO EXISTE DADOS PARA ESTE SEGMENTO DATA**** H".
-                if "NAO EXISTE DADOS" in str(primeiro).upper():
-                    return None
-                ano, mes = _extract_year_month(primeiro)
-            else:
-                ano, mes = _extract_year_month(name)
+def _cosif_build(csv_path: Path, name: str) -> tuple[pl.LazyFrame, CosifInfo] | None:
+    """Le o CSV do cosif (UTF-8) e devolve o ``LazyFrame`` final e a particao.
 
-            plano = "cosif_2025" if ano >= 2025 else "cosif_1988"
-            if "conta" in cols:
-                lf = lf.with_columns(
-                    pl.col("conta").cast(pl.Utf8).str.strip_chars().alias("conta")
-                )
-                if plano == "cosif_1988":
-                    # L8: comeca com '00' e tem 10 digitos no plano antigo
-                    lf = lf.with_columns(
-                        pl.when(
-                            pl.col("conta").str.starts_with("00")
-                            & (pl.col("conta").str.len_chars() == 10)
-                        )
-                        .then(pl.col("conta").str.slice(2))
-                        .otherwise(pl.col("conta"))
-                        .alias("conta")
-                    )
+    ``None`` para arquivo sem linhas ou marcador de mes sem dados.
+    """
+    skip = _preamble_skip(csv_path, ("#DATA_BASE", "#DATA", "DATA;", "DATA_BASE", "#"))
+    lf = _scan(
+        csv_path,
+        skip_rows=skip,
+        decimal_comma=True,
+        schema_overrides=_COSIF_TEXTO,
+    )
+    if lf.head(1).collect().height == 0:
+        return None
 
+    col_map = {}
+    for c in lf.collect_schema().names():
+        norm = _norm_col(c.lstrip("#").strip())
+        if norm in ("data", "data_base"):
+            col_map[c] = "data_base"
+        elif norm in ("nome_instituicao", "nomeinstituicao"):
+            col_map[c] = "nome_instituicao"
+        elif norm in ("nome_conta", "nomeconta"):
+            col_map[c] = "nome_conta"
+        elif norm in ("cod_congl", "cod_conglomerado"):
+            col_map[c] = "cod_congl"
+        elif norm in ("nome_congl", "nome_conglomerado"):
+            col_map[c] = "nome_congl"
+        else:
+            col_map[c] = norm
+    lf = lf.rename(col_map)
+    schema = lf.collect_schema()
+    cols = schema.names()
+
+    # Layout de largura fixa (conglomerados 2007-2010): texto com espacos de
+    # preenchimento e SALDO com espaco no lugar do sinal (" 0000...,18").
+    lf = lf.with_columns(pl.col(pl.String).str.strip_chars())
+    if schema.get("saldo") == pl.String:
+        lf = lf.with_columns(
+            pl.col("saldo").str.replace(",", ".", literal=True).cast(pl.Float64)
+        )
+
+    segmento = _identify_cosif_segmento(name)
+    if "data_base" in cols:
+        primeiro = _first_value(lf, "data_base")
+        # Marcador de mes sem dados (consorcios 2009-2010): uma linha so,
+        # "200901 **** NAO EXISTE DADOS PARA ESTE SEGMENTO DATA**** H".
+        if "NAO EXISTE DADOS" in str(primeiro).upper():
+            return None
+        ano, mes = _extract_year_month(primeiro)
+    else:
+        ano, mes = _extract_year_month(name)
+
+    plano = "cosif_2025" if ano >= 2025 else "cosif_1988"
+    if "conta" in cols:
+        lf = lf.with_columns(
+            pl.col("conta").cast(pl.Utf8).str.strip_chars().alias("conta")
+        )
+        if plano == "cosif_1988":
+            # L8: comeca com '00' e tem 10 digitos no plano antigo
             lf = lf.with_columns(
-                pl.lit(moeda_for_date(ano, mes)).alias("moeda"),
-                pl.lit(plano).alias("plano"),
-                pl.lit(segmento).alias("segmento"),
-                pl.lit(ano).cast(pl.Int32).alias("ano"),
+                pl.when(
+                    pl.col("conta").str.starts_with("00")
+                    & (pl.col("conta").str.len_chars() == 10)
+                )
+                .then(pl.col("conta").str.slice(2))
+                .otherwise(pl.col("conta"))
+                .alias("conta")
             )
-            return lf, {"segmento": segmento, "ano": ano}
 
-        _convert_members(raw_file, writer, res, "COSIF", ENCODINGS["cosif"], build)
+    lf = lf.with_columns(
+        pl.lit(moeda_for_date(ano, mes)).alias("moeda"),
+        pl.lit(plano).alias("plano"),
+        pl.lit(segmento).alias("segmento"),
+        pl.lit(ano).cast(pl.Int32).alias("ano"),
+    )
+    nomes = tuple(
+        sorted(c for c in lf.collect_schema().names() if c not in COSIF_PARTITION_KEYS)
+    )
+    return lf, CosifInfo(segmento, ano, mes, nomes)
+
+
+def _head_as_utf8(
+    path: Path, name: str | None, encoding: str, limit: int, dest: Path
+) -> bool:
+    """Grava em ``dest`` o inicio do CSV em UTF-8, cortado na ultima quebra de linha.
+
+    Devolve ``True`` se leu o arquivo inteiro (nao cortou nada).
+    """
+    enc = encoding.lower()
+    errors = "quantilica_c1" if enc in ("cp1252", "windows-1252") else "strict"
+    codec = "utf-8-sig" if enc in ("utf-8", "utf8") else encoding
+    decoder = codecs.getincrementaldecoder(codec)(errors=errors)
+
+    def read(fh) -> tuple[str, bool]:
+        raw = fh.read(limit + 1)
+        whole = len(raw) <= limit
+        text = decoder.decode(raw[:limit], final=whole)
+        if not whole:
+            text = text[: text.rfind("\n") + 1]
+        return text, whole
+
+    if name is None:
+        with open(path, "rb") as fh:
+            text, whole = read(fh)
+    else:
+        with zipfile.ZipFile(path) as zf, zf.open(name) as fh:
+            text, whole = read(fh)
+    dest.write_text(text, encoding="utf-8", newline="")
+    return whole
+
+
+_PEEK_LIMITS = (1 << 16, 1 << 21)
+
+
+def _cosif_peek(raw_file: Path, name: str | None, shown: str) -> CosifInfo | None:
+    """Segmento, mes e esquema de um membro lendo so o inicio do arquivo.
+
+    E o que decide o grupo do membro antes de qualquer decodificacao completa. Usa
+    o mesmo ``_cosif_build`` da conversao, sobre o inicio do CSV; se o inicio nao
+    basta (so preambulo e cabecalho, ou erro de leitura), tenta um trecho maior e,
+    por fim, o arquivo inteiro. ``None``: arquivo vazio ou mes sem dados.
+    """
+    with tempfile.TemporaryDirectory(
+        dir=os.environ.get("QUANTILICA_LAKE_SCRATCH") or None
+    ) as tmp:
+        head = Path(tmp) / "inicio.csv"
+        for limit in _PEEK_LIMITS:
+            whole = _head_as_utf8(raw_file, name, ENCODINGS["cosif"], limit, head)
+            try:
+                built = _cosif_build(head, shown)
+            except Exception:
+                if whole:
+                    raise
+                continue
+            if built is not None:
+                return built[1]
+            if whole:
+                return None
+    with _member_as_utf8(raw_file, name, ENCODINGS["cosif"]) as csv_path:
+        built = _cosif_build(csv_path, shown)
+    return built[1] if built else None
+
+
+@dataclass
+class _CosifMember:
+    raw_file: Path
+    name: str | None
+    shown: str
+    key: str
+    sha256: str
+    info: CosifInfo
+
+
+def _legacy_cosif_cleanup(
+    dataset_dir: Path, members: Sequence[_CosifMember], dataset_id: str = "cosif"
+) -> int:
+    """Apaga os Parquets por membro do layout anterior (``segmento=/ano=/<chave>``).
+
+    Cada membro publicado num grupo tinha, antes, o proprio Parquet em
+    ``segmento=X/ano=AAAA/<chave>.parquet``, com a mesma chave de arquivo. So esse
+    arquivo, escrito por este dataset e nao agrupado, e apagado: o grupo traz todas
+    as linhas do membro (inclusive as de uma versao anterior do mesmo bruto, que ele
+    substitui). Qualquer outro Parquet da pasta fica. Devolve quantos apagou.
+    """
+    removed = 0
+    for m in members:
+        legacy_dir = dataset_dir / f"segmento={m.info.segmento}" / f"ano={m.info.ano}"
+        path = legacy_dir / f"{m.key}.parquet"
+        if not path.is_file():
+            continue
+        try:
+            meta = footer_from_metadata(pq.ParquetFile(path).metadata)
+        except Exception:
+            logger.warning("cosif: %s ilegivel; mantido", path)
+            continue
+        if (
+            meta.get("quantilica.source_id") != SOURCE_ID
+            or meta.get("quantilica.dataset_id") != dataset_id
+            or META_MEMBERS in meta
+        ):
+            logger.warning("cosif: %s nao e um Parquet por membro deste dataset", path)
+            continue
+        path.unlink()
+        removed += 1
+    return removed
+
+
+def _drop_stale_groups(directory: Path, keep: set[str], dataset_id: str) -> list[Path]:
+    """Apaga, na pasta de um mes, os arquivos agrupados que nenhum grupo atual gera.
+
+    Acontece quando o esquema de um membro muda e o grupo muda de chave: o arquivo
+    com a chave antiga traria as mesmas linhas em duplicidade.
+    """
+    gone = []
+    for path in sorted(directory.glob("*.parquet")):
+        try:
+            meta = footer_from_metadata(pq.ParquetFile(path).metadata)
+        except Exception:
+            continue
+        if (
+            meta.get("quantilica.source_id") == SOURCE_ID
+            and meta.get("quantilica.dataset_id") == dataset_id
+            and META_MEMBERS in meta
+            and meta.get("quantilica.file_key") not in keep
+        ):
+            path.unlink()
+            gone.append(path)
+            logger.warning("cosif: grupo obsoleto %s removido", path)
+    return gone
+
+
+def _convert_cosif_groups(
+    raw_files: Sequence[Path], writer: LakeWriter, res: ConvertResult
+) -> None:
+    """Converte o cosif: um Parquet por segmento e mes (``write_group``).
+
+    O membro de um ZIP so se sabe de que mes e segmento e depois de olhar o inicio
+    dele (``_cosif_peek``); os membros do mesmo segmento e mes viram o grupo
+    ``cosif_<segmento>_<AAAAMM>``. Membros de esquemas diferentes (nomes de colunas
+    diferentes) no mesmo mes e segmento nao se misturam: o primeiro esquema (na
+    ordem da chave dos membros) fica com a chave simples e os demais com ``-v2``,
+    ``-v3``... Com algum membro ilegivel, o grupo nao descarta os membros ausentes
+    da lista (``prune=False``): nao se sabe a que grupo ele pertencia.
+    """
+    members: list[_CosifMember] = []
+    inspection_failed = False
+    for raw_file in sorted(raw_files):
+        try:
+            names = _iter_members(raw_file)
+            digest = sha256_file(raw_file) if names else ""
+        except (OSError, zipfile.BadZipFile) as exc:
+            res.errors.append(f"COSIF {raw_file.name}: ZIP ilegivel: {exc}")
+            inspection_failed = True
+            continue
+        for name in names:
+            shown = name or raw_file.name
+            try:
+                info = _cosif_peek(raw_file, name, shown)
+            except Exception as exc:
+                res.errors.append(
+                    f"Erro ao converter COSIF {shown} em {raw_file.name}: {exc}"
+                )
+                inspection_failed = True
+                continue
+            if info is None:
+                continue
+            key = composite_file_key(raw_file, name).lower()
+            members.append(_CosifMember(raw_file, name, shown, key, digest, info))
+
+    by_month: dict[tuple[str, int, int], list[_CosifMember]] = {}
+    for m in sorted(members, key=lambda m: m.key):
+        by_month.setdefault((m.info.segmento, m.info.ano, m.info.mes), []).append(m)
+
+    partitions_done: dict[Path, tuple[set[str], bool]] = {}
+    for (segmento, ano, mes), month_members in sorted(by_month.items()):
+        variants: dict[tuple[str, ...], list[_CosifMember]] = {}
+        for m in month_members:
+            variants.setdefault(m.info.colunas, []).append(m)
+        base = f"cosif_{segmento}_{ano:04d}{mes:02d}"
+        partitions = {"segmento": segmento, "ano": ano, "mes": f"{mes:02d}"}
+        target = writer.dataset_dir / "/".join(
+            f"{k}={v}" for k, v in partitions.items()
+        )
+        keep, ok = partitions_done.setdefault(target, (set(), True))
+        if len(variants) > 1:
+            logger.warning(
+                "cosif: %s/%04d%02d tem %d esquemas de colunas; um Parquet por esquema",
+                segmento,
+                ano,
+                mes,
+                len(variants),
+            )
+        for n, group in enumerate(variants.values(), start=1):
+            group_key = base if n == 1 else f"{base}-v{n}"
+            keep.add(group_key)
+            try:
+                with ExitStack() as stack:
+                    gm = [_group_member(m, stack) for m in group]
+                    options = {
+                        "partitions": partitions,
+                        "contract_version": COSIF_CONTRACT_VERSION,
+                        "converter_version": COSIF_CONVERTER_VERSION,
+                        "prune": not inspection_failed,
+                    }
+                    if writer.is_current_group(group_key, gm, **options):
+                        res.skipped += len(gm)
+                    else:
+                        written = writer.write_group(
+                            group_key, gm, converter="bcb-microdados-fetcher", **options
+                        )
+                        res.converted += len(written.written)
+                        res.skipped += len(written.kept)
+            except Exception as exc:
+                ok = False
+                partitions_done[target] = (keep, False)
+                res.errors.append(f"Erro ao converter COSIF {group_key}: {exc}")
+                continue
+            _legacy_cosif_cleanup(writer.dataset_dir, group)
+    if not inspection_failed:
+        for target, (keep, ok) in partitions_done.items():
+            if ok:
+                _drop_stale_groups(target, keep, "cosif")
+
+
+def _group_member(m: _CosifMember, stack: ExitStack) -> GroupMember:
+    """Membro do grupo; o CSV so e decodificado se o membro tiver de ser escrito."""
+
+    def data() -> pl.LazyFrame:
+        csv_path = stack.enter_context(
+            _member_as_utf8(m.raw_file, m.name, ENCODINGS["cosif"])
+        )
+        built = _cosif_build(csv_path, m.shown)
+        if built is None:
+            raise ValueError(f"{m.shown}: sem linhas na conversao completa")
+        if built[1] != m.info:
+            raise ValueError(f"{m.shown}: segmento, mes ou colunas mudaram na leitura")
+        return built[0]
+
+    return GroupMember(m.raw_file, data, key=m.key, sha256=m.sha256)
 
 
 converter = BcbMicrodadosLakeConverter()

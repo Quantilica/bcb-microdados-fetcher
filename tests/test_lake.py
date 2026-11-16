@@ -195,18 +195,24 @@ def test_convert_cosif_eras_and_plans(tmp_path: Path) -> None:
     errors_cosif = check_dataset(ds_cosif)
     assert not errors_cosif, f"check_dataset errors cosif: {errors_cosif}"
 
-    (part_2024,) = list((ds_cosif / "segmento=bancos" / "ano=2024").glob("*.parquet"))
+    (part_2024,) = list(
+        (ds_cosif / "segmento=bancos" / "ano=2024" / "mes=12").glob("*.parquet")
+    )
     df_2024 = pl.read_parquet(part_2024)
     assert df_2024["plano"][0] == "cosif_1988"
     assert df_2024["moeda"][0] == "R$"
     assert df_2024["conta"][0] == "11112222"
 
-    (part_1995,) = list((ds_cosif / "segmento=bancos" / "ano=1995").glob("*.parquet"))
+    (part_1995,) = list(
+        (ds_cosif / "segmento=bancos" / "ano=1995" / "mes=01").glob("*.parquet")
+    )
     df_1995 = pl.read_parquet(part_1995)
     assert df_1995["plano"][0] == "cosif_1988"
     assert df_1995["conta"][0] == "11112222"
 
-    (part_2025,) = list((ds_cosif / "segmento=bancos" / "ano=2025").glob("*.parquet"))
+    (part_2025,) = list(
+        (ds_cosif / "segmento=bancos" / "ano=2025" / "mes=01").glob("*.parquet")
+    )
     df_2025 = pl.read_parquet(part_2025)
     assert df_2025["plano"][0] == "cosif_2025"
     assert df_2025["conta"][0] == "1000000009"
