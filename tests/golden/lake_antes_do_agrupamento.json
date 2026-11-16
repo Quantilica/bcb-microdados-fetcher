@@ -1,0 +1,793 @@
+{
+ "contagem_de_arquivos": {
+  "bancos/199501": 1,
+  "bancos/202411": 1,
+  "bancos/202412": 3,
+  "bancos/202501": 1,
+  "conglomerados/200901": 1,
+  "cooperativas/202412": 2,
+  "prudencial/202606": 1
+ },
+ "convertidos": 10,
+ "lake": {
+  "bancos/199501": {
+   "atributo:String|cnpj:String|conta:String|data_base:Int64|documento:Int64|moeda:String|nome_conta:String|nome_instituicao:String|plano:String|saldo:Float64": {
+    "amostra": [
+     [
+      "U",
+      "00000000",
+      "11112222",
+      "199501",
+      "4010",
+      "R$",
+      "CAIXA 0",
+      "BANCO AÇÃO S/A",
+      "cosif_1988",
+      "5555.5"
+     ],
+     [
+      "U",
+      "00000001",
+      "11112223",
+      "199501",
+      "4010",
+      "R$",
+      "CAIXA 1",
+      "D'AGUA CRÉDITO",
+      "cosif_1988",
+      "15556.5"
+     ],
+     [
+      "U",
+      "00000002",
+      "11112224",
+      "199501",
+      "4010",
+      "R$",
+      "CAIXA 2",
+      "COOP \"UNIÃO\"",
+      "cosif_1988",
+      "25557.5"
+     ]
+    ],
+    "colunas": [
+     [
+      "atributo",
+      "String"
+     ],
+     [
+      "cnpj",
+      "String"
+     ],
+     [
+      "conta",
+      "String"
+     ],
+     [
+      "data_base",
+      "Int64"
+     ],
+     [
+      "documento",
+      "Int64"
+     ],
+     [
+      "moeda",
+      "String"
+     ],
+     [
+      "nome_conta",
+      "String"
+     ],
+     [
+      "nome_instituicao",
+      "String"
+     ],
+     [
+      "plano",
+      "String"
+     ],
+     [
+      "saldo",
+      "Float64"
+     ]
+    ],
+    "conteudo_sha256": "f66f98094a401cbef0ad0a06cc92ff39fb55dc25d8b96cc952058e2790cc5f6e",
+    "linhas": 6
+   }
+  },
+  "bancos/202411": {
+   "agencia:String|cnpj:String|cod_congl:String|conta:String|data_base:Int64|documento:Int64|moeda:String|nome_congl:String|nome_conta:String|nome_instituicao:String|plano:String|saldo:Float64|taxonomia:String": {
+    "amostra": [
+     [
+      "0001",
+      "00000000",
+      "0",
+      "11112222",
+      "202411",
+      "4010",
+      "R$",
+      "NENHUM",
+      "CAIXA 0",
+      "BANCO AÇÃO S/A",
+      "cosif_1988",
+      "1000.0",
+      "0"
+     ],
+     [
+      "0001",
+      "00000001",
+      "0",
+      "11112223",
+      "202411",
+      "4010",
+      "R$",
+      "NENHUM",
+      "CAIXA 1",
+      "D'AGUA CRÉDITO",
+      "cosif_1988",
+      "1037.01",
+      "0"
+     ],
+     [
+      "0001",
+      "00000002",
+      "0",
+      "11112224",
+      "202411",
+      "4010",
+      "R$",
+      "NENHUM",
+      "CAIXA 2",
+      "COOP \"UNIÃO\"",
+      "cosif_1988",
+      "1074.02",
+      "0"
+     ]
+    ],
+    "colunas": [
+     [
+      "agencia",
+      "String"
+     ],
+     [
+      "cnpj",
+      "String"
+     ],
+     [
+      "cod_congl",
+      "String"
+     ],
+     [
+      "conta",
+      "String"
+     ],
+     [
+      "data_base",
+      "Int64"
+     ],
+     [
+      "documento",
+      "Int64"
+     ],
+     [
+      "moeda",
+      "String"
+     ],
+     [
+      "nome_congl",
+      "String"
+     ],
+     [
+      "nome_conta",
+      "String"
+     ],
+     [
+      "nome_instituicao",
+      "String"
+     ],
+     [
+      "plano",
+      "String"
+     ],
+     [
+      "saldo",
+      "Float64"
+     ],
+     [
+      "taxonomia",
+      "String"
+     ]
+    ],
+    "conteudo_sha256": "a4133a7fce88dde32cb617c26664eef627437f76c1e773fc27062d98dfe85bbd",
+    "linhas": 5
+   }
+  },
+  "bancos/202412": {
+   "agencia:String|cnpj:String|cod_congl:String|conta:String|data_base:Int64|documento:Int64|moeda:String|nome_congl:String|nome_conta:String|nome_instituicao:String|plano:String|saldo:Float64|taxonomia:String": {
+    "amostra": [
+     [
+      "0001",
+      "00000100",
+      "0",
+      "11112222",
+      "202412",
+      "4010",
+      "R$",
+      "NENHUM",
+      "CAIXA 0",
+      "BANCO AÇÃO S/A",
+      "cosif_1988",
+      "1000.0",
+      "0"
+     ],
+     [
+      "0001",
+      "00000101",
+      "0",
+      "11112223",
+      "202412",
+      "4010",
+      "R$",
+      "NENHUM",
+      "CAIXA 1",
+      "D'AGUA CRÉDITO",
+      "cosif_1988",
+      "1037.01",
+      "0"
+     ],
+     [
+      "0001",
+      "00000102",
+      "0",
+      "11112224",
+      "202412",
+      "4010",
+      "R$",
+      "NENHUM",
+      "CAIXA 2",
+      "COOP \"UNIÃO\"",
+      "cosif_1988",
+      "1074.02",
+      "0"
+     ]
+    ],
+    "colunas": [
+     [
+      "agencia",
+      "String"
+     ],
+     [
+      "cnpj",
+      "String"
+     ],
+     [
+      "cod_congl",
+      "String"
+     ],
+     [
+      "conta",
+      "String"
+     ],
+     [
+      "data_base",
+      "Int64"
+     ],
+     [
+      "documento",
+      "Int64"
+     ],
+     [
+      "moeda",
+      "String"
+     ],
+     [
+      "nome_congl",
+      "String"
+     ],
+     [
+      "nome_conta",
+      "String"
+     ],
+     [
+      "nome_instituicao",
+      "String"
+     ],
+     [
+      "plano",
+      "String"
+     ],
+     [
+      "saldo",
+      "Float64"
+     ],
+     [
+      "taxonomia",
+      "String"
+     ]
+    ],
+    "conteudo_sha256": "a54f324daded6dce60233a70f72bf7b2d6ed3514ca1c57d8b079930d33d3a5f0",
+    "linhas": 9
+   }
+  },
+  "bancos/202501": {
+   "agencia:String|cnpj:String|cod_congl:String|conta:String|data_base:Int64|documento:Int64|moeda:String|nome_congl:String|nome_conta:String|nome_instituicao:String|plano:String|saldo:Float64|taxonomia:String": {
+    "amostra": [
+     [
+      "0001",
+      "00000000",
+      "0",
+      "1000000009",
+      "202501",
+      "4010",
+      "R$",
+      "NENHUM",
+      "CAIXA 0",
+      "BANCO AÇÃO S/A",
+      "cosif_2025",
+      "1000.0",
+      "0"
+     ],
+     [
+      "0001",
+      "00000001",
+      "0",
+      "1000000010",
+      "202501",
+      "4010",
+      "R$",
+      "NENHUM",
+      "CAIXA 1",
+      "D'AGUA CRÉDITO",
+      "cosif_2025",
+      "1037.01",
+      "0"
+     ],
+     [
+      "0001",
+      "00000002",
+      "0",
+      "1000000011",
+      "202501",
+      "4010",
+      "R$",
+      "NENHUM",
+      "CAIXA 2",
+      "COOP \"UNIÃO\"",
+      "cosif_2025",
+      "1074.02",
+      "0"
+     ]
+    ],
+    "colunas": [
+     [
+      "agencia",
+      "String"
+     ],
+     [
+      "cnpj",
+      "String"
+     ],
+     [
+      "cod_congl",
+      "String"
+     ],
+     [
+      "conta",
+      "String"
+     ],
+     [
+      "data_base",
+      "Int64"
+     ],
+     [
+      "documento",
+      "Int64"
+     ],
+     [
+      "moeda",
+      "String"
+     ],
+     [
+      "nome_congl",
+      "String"
+     ],
+     [
+      "nome_conta",
+      "String"
+     ],
+     [
+      "nome_instituicao",
+      "String"
+     ],
+     [
+      "plano",
+      "String"
+     ],
+     [
+      "saldo",
+      "Float64"
+     ],
+     [
+      "taxonomia",
+      "String"
+     ]
+    ],
+    "conteudo_sha256": "3caba755918d5f1b576e934810584a919b4cb9c3b911a4a0a65ea40b9537cfd7",
+    "linhas": 4
+   }
+  },
+  "conglomerados/200901": {
+   "atributo:String|cod_congl:String|conta:String|data_base:Int64|documento:Int64|moeda:String|nome_congl:String|nome_conta:String|plano:String|saldo:Float64": {
+    "amostra": [
+     [
+      "G",
+      "00010045",
+      "10000007",
+      "200901",
+      "4040",
+      "R$",
+      "BRADESCO",
+      "CIRCULANTE",
+      "cosif_1988",
+      "363577595065.18"
+     ],
+     [
+      "G",
+      "00010045",
+      "90900000",
+      "200901",
+      "4040",
+      "R$",
+      "BRADESCO",
+      "CONTROLE",
+      "cosif_1988",
+      "-5840912.56"
+     ]
+    ],
+    "colunas": [
+     [
+      "atributo",
+      "String"
+     ],
+     [
+      "cod_congl",
+      "String"
+     ],
+     [
+      "conta",
+      "String"
+     ],
+     [
+      "data_base",
+      "Int64"
+     ],
+     [
+      "documento",
+      "Int64"
+     ],
+     [
+      "moeda",
+      "String"
+     ],
+     [
+      "nome_congl",
+      "String"
+     ],
+     [
+      "nome_conta",
+      "String"
+     ],
+     [
+      "plano",
+      "String"
+     ],
+     [
+      "saldo",
+      "Float64"
+     ]
+    ],
+    "conteudo_sha256": "a0a1d86ca1f3f1e162562078412449fb951fa5bd5b3a52987888a8a8f5ba3b11",
+    "linhas": 2
+   }
+  },
+  "cooperativas/202412": {
+   "agencia:String|cnpj:String|cod_congl:String|conta:String|data_base:Int64|documento:Int64|moeda:String|nome_congl:String|nome_conta:String|nome_instituicao:String|plano:String|saldo:Float64|taxonomia:String": {
+    "amostra": [
+     [
+      "0001",
+      "00000500",
+      "0",
+      "11112222",
+      "202412",
+      "4010",
+      "R$",
+      "NENHUM",
+      "CAIXA 0",
+      "BANCO AÇÃO S/A",
+      "cosif_1988",
+      "1000.0",
+      "0"
+     ],
+     [
+      "0001",
+      "00000501",
+      "0",
+      "11112223",
+      "202412",
+      "4010",
+      "R$",
+      "NENHUM",
+      "CAIXA 1",
+      "D'AGUA CRÉDITO",
+      "cosif_1988",
+      "1037.01",
+      "0"
+     ],
+     [
+      "0001",
+      "00000502",
+      "0",
+      "11112224",
+      "202412",
+      "4010",
+      "R$",
+      "NENHUM",
+      "CAIXA 2",
+      "COOP \"UNIÃO\"",
+      "cosif_1988",
+      "1074.02",
+      "0"
+     ]
+    ],
+    "colunas": [
+     [
+      "agencia",
+      "String"
+     ],
+     [
+      "cnpj",
+      "String"
+     ],
+     [
+      "cod_congl",
+      "String"
+     ],
+     [
+      "conta",
+      "String"
+     ],
+     [
+      "data_base",
+      "Int64"
+     ],
+     [
+      "documento",
+      "Int64"
+     ],
+     [
+      "moeda",
+      "String"
+     ],
+     [
+      "nome_congl",
+      "String"
+     ],
+     [
+      "nome_conta",
+      "String"
+     ],
+     [
+      "nome_instituicao",
+      "String"
+     ],
+     [
+      "plano",
+      "String"
+     ],
+     [
+      "saldo",
+      "Float64"
+     ],
+     [
+      "taxonomia",
+      "String"
+     ]
+    ],
+    "conteudo_sha256": "9c8e58e678ad9dc3cbd2f1e6b658ee96abc43e01cea18e9c7c86e8c6229cf8f5",
+    "linhas": 5
+   },
+   "cnpj:String|conta:String|data_base:Int64|documento:Int64|moeda:String|nome_conta:String|nome_instituicao:String|plano:String|saldo:Float64|taxonomia:String": {
+    "amostra": [
+     [
+      "00000000",
+      "11112222",
+      "202412",
+      "4010",
+      "R$",
+      "CAIXA 0",
+      "BANCO AÇÃO S/A",
+      "cosif_1988",
+      "200.25",
+      "COOPERATIVAS DE CREDITO"
+     ],
+     [
+      "00000001",
+      "11112223",
+      "202412",
+      "4010",
+      "R$",
+      "CAIXA 1",
+      "D'AGUA CRÉDITO",
+      "cosif_1988",
+      "201.25",
+      "COOPERATIVAS DE CREDITO"
+     ],
+     [
+      "00000002",
+      "11112224",
+      "202412",
+      "4010",
+      "R$",
+      "CAIXA 2",
+      "COOP \"UNIÃO\"",
+      "cosif_1988",
+      "202.25",
+      "COOPERATIVAS DE CREDITO"
+     ]
+    ],
+    "colunas": [
+     [
+      "cnpj",
+      "String"
+     ],
+     [
+      "conta",
+      "String"
+     ],
+     [
+      "data_base",
+      "Int64"
+     ],
+     [
+      "documento",
+      "Int64"
+     ],
+     [
+      "moeda",
+      "String"
+     ],
+     [
+      "nome_conta",
+      "String"
+     ],
+     [
+      "nome_instituicao",
+      "String"
+     ],
+     [
+      "plano",
+      "String"
+     ],
+     [
+      "saldo",
+      "Float64"
+     ],
+     [
+      "taxonomia",
+      "String"
+     ]
+    ],
+    "conteudo_sha256": "86f4147e5f1765056869a7171f71616cf6c8a6e43583e870c00dc2a6b2b14634",
+    "linhas": 3
+   }
+  },
+  "prudencial/202606": {
+   "agencia:String|cnpj:String|cod_congl:String|conta:String|data_base:Int64|documento:Int64|moeda:String|nome_congl:String|nome_conta:String|nome_instituicao:String|plano:String|saldo:Float64|taxonomia:String": {
+    "amostra": [
+     [
+      "",
+      "00000000",
+      "C0080329",
+      "1000000009",
+      "202606",
+      "4060",
+      "R$",
+      "X - PRUDENCIAL",
+      "Ativo",
+      "BCO DO BRASIL S.A.",
+      "cosif_2025",
+      "0.5",
+      "CONGLOMERADO PRUDENCIAL"
+     ],
+     [
+      "",
+      "00000000",
+      "C0080329",
+      "1000000009",
+      "202606",
+      "4060",
+      "R$",
+      "X - PRUDENCIAL",
+      "Ativo",
+      "BCO DO BRASIL S.A.",
+      "cosif_2025",
+      "1.5",
+      "CONGLOMERADO PRUDENCIAL"
+     ],
+     [
+      "",
+      "00000000",
+      "C0080329",
+      "1000000009",
+      "202606",
+      "4060",
+      "R$",
+      "X - PRUDENCIAL",
+      "Ativo",
+      "BCO DO BRASIL S.A.",
+      "cosif_2025",
+      "10.5",
+      "CONGLOMERADO PRUDENCIAL"
+     ]
+    ],
+    "colunas": [
+     [
+      "agencia",
+      "String"
+     ],
+     [
+      "cnpj",
+      "String"
+     ],
+     [
+      "cod_congl",
+      "String"
+     ],
+     [
+      "conta",
+      "String"
+     ],
+     [
+      "data_base",
+      "Int64"
+     ],
+     [
+      "documento",
+      "Int64"
+     ],
+     [
+      "moeda",
+      "String"
+     ],
+     [
+      "nome_congl",
+      "String"
+     ],
+     [
+      "nome_conta",
+      "String"
+     ],
+     [
+      "nome_instituicao",
+      "String"
+     ],
+     [
+      "plano",
+      "String"
+     ],
+     [
+      "saldo",
+      "Float64"
+     ],
+     [
+      "taxonomia",
+      "String"
+     ]
+    ],
+    "conteudo_sha256": "3112466c7e323e6cd78317f79f8476152cf6b1b10a948206a66bd59546b1f116",
+    "linhas": 5201
+   }
+  }
+ }
+}
