@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import codecs
+import glob
 import json
 import logging
 import os
@@ -25,11 +26,15 @@ try:
         GroupMember,
         LakeWriter,
         footer_from_metadata,
+        origin_matches,
+        sha256_file,
     )
-    from quantilica.core.files import sha256_file
     from quantilica.core.lake import (
+        LAYOUT_VERSION,
         DatasetDescriptor,
         composite_file_key,
+        file_key,
+        partition_dir,
         partition_types_for,
         select_current,
     )
@@ -219,6 +224,34 @@ def _first_value(lf: pl.LazyFrame, col: str) -> Any:
     return lf.select(pl.col(col).first()).collect().item()
 
 
+def _registrada(
+    dataset_dir: Path, key: str, digest: str, layout_version: int = LAYOUT_VERSION
+) -> bool:
+    """Se ``key`` já está no lake com este sha256, em qualquer partição ``ano=/mes=``.
+
+    O mesmo teste de ``LakeWriter.is_current`` (``origin_matches``), sem precisar da
+    partição, que só se conhece lendo os dados: lista as pastas que têm um Parquet
+    dessa chave e confere o rodapé de cada uma. Só diretório e rodapé do lake.
+    """
+    pattern = f"ano=*/mes=*/{glob.escape(key)}*.parquet"
+    pastas = sorted({p.parent for p in dataset_dir.glob(pattern)})
+    return any(
+        origin_matches(d, key, digest, layout_version=layout_version) for d in pastas
+    )
+
+
+def _em_dia(writer: LakeWriter, key: str, raw_file: Path) -> bool:
+    """Se o lake do ``writer`` já tem ``key`` deste bruto (sempre falso com force)."""
+    if writer.force:
+        return False
+    return _registrada(
+        writer.dataset_dir,
+        key,
+        sha256_file(raw_file),
+        writer.descriptor.layout_version,
+    )
+
+
 def _convert_members(
     raw_file: Path,
     writer: LakeWriter,
@@ -231,6 +264,10 @@ def _convert_members(
 
     ``build(csv_path, member_name)`` devolve ``(lazyframe, partitions)`` ou ``None``.
     """
+    # CSV solto já no lake: nem abre o arquivo para saber que não é um ZIP.
+    if _em_dia(writer, composite_file_key(raw_file, None).lower(), raw_file):
+        res.skipped += 1
+        return
     try:
         members = _iter_members(raw_file)
     except (OSError, zipfile.BadZipFile) as exc:
@@ -240,6 +277,10 @@ def _convert_members(
         shown = name or raw_file.name
         key = composite_file_key(raw_file, name).lower()
         try:
+            # Membro já no lake: não transcodifica nem monta o plano de leitura.
+            if _em_dia(writer, key, raw_file):
+                res.skipped += 1
+                continue
             with _member_as_utf8(raw_file, name, encoding) as csv_path:
                 built = build(csv_path, shown)
                 if built is None:
@@ -449,6 +490,9 @@ class BcbMicrodadosLakeConverter:
 
         cosif_files: list[Path] = []
         for raw_file in active_files:
+            # Sidecar de manifesto não é dado (nenhum ramo o convertia).
+            if raw_file.name.endswith(".manifest.json"):
+                continue
             fname = raw_file.name.lower()
             parent = raw_file.parent.name.lower()
 
@@ -464,7 +508,8 @@ class BcbMicrodadosLakeConverter:
                     self._convert_scr(raw_file, writers["scr"], res)
             # 2. ESTBAN files
             elif "estban" in fname or "estban" in parent:
-                self._convert_estban(raw_file, writers, res)
+                if "estban_municipio" in writers or "estban_agencia" in writers:
+                    self._convert_estban(raw_file, writers, res, lake_path)
             # 3. COSIF files
             elif (
                 "cosif" in fname
@@ -487,6 +532,9 @@ class BcbMicrodadosLakeConverter:
     ) -> None:
         """Converte o JSON mensal de uma função OData do Olinda."""
         try:
+            if _em_dia(writer, file_key(raw_file), raw_file):
+                res.skipped += 1
+                return
             if _olinda_vazio(raw_file):
                 logger.warning(
                     "%s %s: a API ainda não publicou este mês (value vazio); pulado",
@@ -550,7 +598,11 @@ class BcbMicrodadosLakeConverter:
         _convert_members(raw_file, writer, res, "SCR", ENCODINGS["scr"], build)
 
     def _convert_estban(
-        self, raw_file: Path, writers: dict[str, LakeWriter], res: ConvertResult
+        self,
+        raw_file: Path,
+        writers: dict[str, LakeWriter],
+        res: ConvertResult,
+        lake_path: Path,
     ) -> None:
         """Convert ESTBAN files (município e agência) into long format."""
         # municipio x agencia depende das colunas de cada membro; o writer e escolhido
@@ -561,10 +613,32 @@ class BcbMicrodadosLakeConverter:
             res.errors.append(f"ESTBAN {raw_file.name}: ZIP ilegivel: {exc}")
             return
 
+        digest = None
         for name in members:
             shown = name or raw_file.name
             key = composite_file_key(raw_file, name).lower()
             try:
+                # Membro já no lake (município ou agência, em qualquer partição):
+                # não transcodifica nem lê. Se está no dataset de outra tarefa, não
+                # é desta (como no caminho completo, que o ignora sem contar).
+                if not any(w.force for w in writers.values()):
+                    digest = digest or sha256_file(raw_file)
+                    dono = [
+                        ds
+                        for ds in ("estban_municipio", "estban_agencia")
+                        if _registrada(
+                            lake_path / self.source_id / ds,
+                            key,
+                            digest,
+                            writers[ds].descriptor.layout_version
+                            if ds in writers
+                            else LAYOUT_VERSION,
+                        )
+                    ]
+                    if dono:
+                        if any(ds in writers for ds in dono):
+                            res.skipped += 1
+                        continue
                 with _member_as_utf8(
                     raw_file, name, ENCODINGS["estban_municipio"]
                 ) as csv_path:
@@ -913,6 +987,134 @@ def _drop_stale_groups(directory: Path, keep: set[str], dataset_id: str) -> list
     return gone
 
 
+def _cosif_do_lake(
+    raw_files: Sequence[Path], writer: LakeWriter, res: ConvertResult
+) -> bool:
+    """Decide só por sidecars e rodapés se o cosif já está em dia no lake.
+
+    Para cada membro dos brutos (só o índice do ZIP é aberto), procura-o nos
+    membros dos arquivos agrupados do lake com o sha256 e as versões de agora e
+    confere cada arquivo agrupado com ``is_current_group`` (membros que o rodapé
+    lista, sem órfãos), sem ``_cosif_peek`` nem transcodificação. Membro sem
+    registro só entra se, olhado de perto, é vazio ou sem dados do mês; se tem
+    dados (novo, ou mudou), ou qualquer coisa falha, devolve ``False`` com ``res``
+    intacto e o caminho completo roda. Em caso de sucesso faz a mesma contagem e
+    a mesma limpeza dele.
+    """
+    if writer.force:
+        return False
+    dataset_dir = writer.dataset_dir
+    grupos: dict[Path, tuple[str, dict[str, dict[str, Any]]]] = {}
+    por_chave: dict[str, list[Path]] = {}
+    for path in sorted(dataset_dir.glob("segmento=*/ano=*/mes=*/*.parquet")):
+        try:
+            meta = footer_from_metadata(pq.ParquetFile(path).metadata)
+        except Exception:
+            return False
+        if (
+            meta.get("quantilica.source_id") != SOURCE_ID
+            or meta.get("quantilica.dataset_id") != "cosif"
+            or META_MEMBERS not in meta
+        ):
+            continue
+        entradas = json.loads(meta[META_MEMBERS])
+        grupos[path] = (meta.get("quantilica.file_key", ""), entradas)
+        for key in entradas:
+            por_chave.setdefault(key, []).append(path)
+
+    brutos: dict[str, tuple[Path, str]] = {}  # chave -> (arquivo, sha256)
+    sem_registro: list[tuple[Path, str | None, str]] = []
+    try:
+        for raw_file in sorted(raw_files):
+            names = _iter_members(raw_file, require_zip=True)
+            digest = sha256_file(raw_file) if names else ""
+            for name in names:
+                key = composite_file_key(raw_file, name).lower()
+                destinos = por_chave.get(key, [])
+                entrada = grupos[destinos[0]][1][key] if len(destinos) == 1 else None
+                if (
+                    entrada is not None
+                    and entrada.get("origin_sha256") == digest
+                    and entrada.get("contract_version") == COSIF_CONTRACT_VERSION
+                    and entrada.get("converter_version") == COSIF_CONVERTER_VERSION
+                ):
+                    brutos[key] = (raw_file, digest)
+                elif destinos:
+                    return False  # mudou ou está em mais de um arquivo
+                else:
+                    sem_registro.append((raw_file, name, name or raw_file.name))
+        # Sem registro: só vale se não há dados do mês (vazio, "NAO EXISTE DADOS").
+        for raw_file, name, shown in sem_registro:
+            if _cosif_peek(raw_file, name, shown) is not None:
+                return False
+    except Exception:
+        return False
+
+    contados = 0
+    conferidos: list[tuple[Path, str, dict[str, Any], list[GroupMember]]] = []
+    for path, (group_key, entradas) in grupos.items():
+        membros = [k for k in entradas if k in brutos]
+        if not membros:
+            continue
+        try:
+            rel = path.relative_to(dataset_dir).parts
+            valores = dict(p.split("=", 1) for p in rel[:-1])
+            partitions = {
+                "segmento": valores["segmento"],
+                "ano": int(valores["ano"]),
+                "mes": valores["mes"],
+            }
+        except (ValueError, KeyError):
+            return False
+        if (
+            list(valores) != COSIF_PARTITION_KEYS
+            or partition_dir(dataset_dir, partitions) != path.parent
+            or group_key != path.stem
+        ):
+            return False
+        gm = [
+            GroupMember(brutos[k][0], _nunca_lida, key=k, sha256=brutos[k][1])
+            for k in membros
+        ]
+        if not writer.is_current_group(
+            group_key,
+            gm,
+            partitions=partitions,
+            contract_version=COSIF_CONTRACT_VERSION,
+            converter_version=COSIF_CONVERTER_VERSION,
+            prune=True,
+        ):
+            return False
+        contados += len(gm)
+        conferidos.append((path, group_key, partitions, gm))
+
+    res.skipped += contados
+    keep_por_pasta: dict[Path, set[str]] = {}
+    for path, group_key, partitions, gm in conferidos:
+        keep_por_pasta.setdefault(path.parent, set()).add(group_key)
+        _legacy_cosif_cleanup(
+            dataset_dir,
+            [
+                _CosifMember(
+                    brutos[g.key][0],
+                    None,
+                    "",
+                    g.key,
+                    brutos[g.key][1],
+                    CosifInfo(partitions["segmento"], partitions["ano"], 0, ()),
+                )
+                for g in gm
+            ],
+        )
+    for pasta, keep in keep_por_pasta.items():
+        _drop_stale_groups(pasta, keep, "cosif")
+    return True
+
+
+def _nunca_lida() -> pl.LazyFrame:
+    raise AssertionError("membro lido durante a checagem de grupo em dia")
+
+
 def _convert_cosif_groups(
     raw_files: Sequence[Path], writer: LakeWriter, res: ConvertResult
 ) -> None:
@@ -926,6 +1128,8 @@ def _convert_cosif_groups(
     ``-v3``... Com algum membro ilegivel, o grupo nao descarta os membros ausentes
     da lista (``prune=False``): nao se sabe a que grupo ele pertencia.
     """
+    if _cosif_do_lake(raw_files, writer, res):
+        return
     members: list[_CosifMember] = []
     inspection_failed = False
     for raw_file in sorted(raw_files):

@@ -8,6 +8,7 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 ## [Não lançado]
 
 ### Alterado
+- **Build do lake sem mudança não lê o bruto.** O sha256 vem do sidecar `.manifest.json` (`quantilica.analytics.lake.sha256_file`), e o que já está no lake com o mesmo sha256 é pulado antes de transcodificar o membro ou ler o JSON: `scr`, `estban_*` e os datasets do Olinda conferem o rodapé do Parquet em qualquer partição `ano=/mes=` (a partição só se conheceria lendo os dados); o `cosif` confere os membros e `is_current_group` de cada arquivo agrupado sem espiar o início de cada membro. Continuam abertos o índice dos ZIPs e, no `cosif`, o início do membro que não deixa registro no lake (mês sem dados). Uma tarefa `scr` não abre mais os brutos do `estban`, e os sidecars de manifesto são ignorados logo na descoberta.
 - CI e infraestrutura alinhados ao template (fetcher-template v0.2.1).
 
 ## [0.6.0] - 2026-11-16
