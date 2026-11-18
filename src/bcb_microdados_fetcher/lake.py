@@ -29,6 +29,7 @@ try:
         origin_matches,
         sha256_file,
     )
+    from quantilica.analytics.schema import DataContract
     from quantilica.core.lake import (
         LAYOUT_VERSION,
         DatasetDescriptor,
@@ -100,8 +101,20 @@ ENCODINGS = {
 #: Particao do cosif: um Parquet por segmento e mes (``write_group``).
 COSIF_PARTITION_KEYS = ["segmento", "ano", "mes"]
 #: Versoes gravadas em cada membro do grupo; subir uma reconverte o cosif.
+#: Suba ``COSIF_CONVERTER_VERSION`` quando mudar o que decide o grupo de um membro
+#: (segmento, mês, esquema de colunas, nome do grupo) ou o filtro de membros: o
+#: build sem mudança só confere sha256 e versões, nunca recalcula o destino.
 COSIF_CONTRACT_VERSION = 1
 COSIF_CONVERTER_VERSION = "1"
+#: Revisão do layout de ``scr``, ``estban_*`` e dos datasets do Olinda (um Parquet
+#: por membro ou arquivo). O rodapé desses Parquets só guarda o sha256 do bruto,
+#: então a regra que deriva a partição (``ano``/``mes``) dos dados, do nome ou de
+#: ``data_base`` não é conferida pelo build sem mudança. Suba esta constante
+#: quando essa regra, o nome da chave do arquivo ou as colunas gravadas mudarem:
+#: da revisão 2 em diante a versão vai no rodapé como versão de contrato e o que
+#: foi gravado com outra revisão é reconvertido uma vez. A 1 é o layout de sempre
+#: (nenhum contrato no rodapé), por isso nada do lake atual muda.
+LAYOUT_REVISION = 1
 # Identificadores sempre como texto: zeros a esquerda importam (BB = 00000000) e
 # o CNPJ dos prudenciais traz codigo de conglomerado (C0085111) apos milhares de
 # linhas numericas, alem da janela de inferencia.
@@ -224,6 +237,18 @@ def _first_value(lf: pl.LazyFrame, col: str) -> Any:
     return lf.select(pl.col(col).first()).collect().item()
 
 
+def _contract_version() -> int | None:
+    """Versão de contrato que carrega a revisão de layout (``None`` na revisão 1)."""
+    return None if LAYOUT_REVISION <= 1 else LAYOUT_REVISION
+
+
+def _contrato(dataset_id: str) -> DataContract | None:
+    """Contrato sem colunas, só para gravar a revisão de layout no rodapé."""
+    if LAYOUT_REVISION <= 1:
+        return None
+    return DataContract(dataset_id, [], version=LAYOUT_REVISION)
+
+
 def _registrada(
     dataset_dir: Path, key: str, digest: str, layout_version: int = LAYOUT_VERSION
 ) -> bool:
@@ -236,7 +261,14 @@ def _registrada(
     pattern = f"ano=*/mes=*/{glob.escape(key)}*.parquet"
     pastas = sorted({p.parent for p in dataset_dir.glob(pattern)})
     return any(
-        origin_matches(d, key, digest, layout_version=layout_version) for d in pastas
+        origin_matches(
+            d,
+            key,
+            digest,
+            layout_version=layout_version,
+            contract_version=_contract_version(),
+        )
+        for d in pastas
     )
 
 
@@ -264,10 +296,17 @@ def _convert_members(
 
     ``build(csv_path, member_name)`` devolve ``(lazyframe, partitions)`` ou ``None``.
     """
-    # CSV solto já no lake: nem abre o arquivo para saber que não é um ZIP.
-    if _em_dia(writer, composite_file_key(raw_file, None).lower(), raw_file):
-        res.skipped += 1
-        return
+    # CSV solto já no lake: nem abre o arquivo para saber que não é um ZIP. Só vale
+    # para .csv/.txt: o Parquet de um ZIP gravado com a chave do próprio ZIP (layout
+    # anterior) não pode dar o ZIP por convertido, os membros ainda faltam.
+    try:
+        if raw_file.suffix.lower() in (".csv", ".txt") and _em_dia(
+            writer, composite_file_key(raw_file, None).lower(), raw_file
+        ):
+            res.skipped += 1
+            return
+    except OSError as exc:
+        logger.debug("%s %s: sha256 indisponível (%s)", label, raw_file.name, exc)
     try:
         members = _iter_members(raw_file)
     except (OSError, zipfile.BadZipFile) as exc:
@@ -286,13 +325,21 @@ def _convert_members(
                 if built is None:
                     continue
                 lf, partitions = built
+                contrato = _contrato(writer.descriptor.dataset_id)
                 if writer.is_current(
-                    raw_file, partitions=partitions, file_key_name=key
+                    raw_file,
+                    partitions=partitions,
+                    file_key_name=key,
+                    contract=contrato,
                 ):
                     res.skipped += 1
                     continue
                 written = writer.write_polars(
-                    lf, src=raw_file, partitions=partitions, file_key_name=key
+                    lf,
+                    src=raw_file,
+                    partitions=partitions,
+                    file_key_name=key,
+                    contract=contrato,
                 )
             if written.status == "skipped":
                 res.skipped += 1
@@ -544,10 +591,13 @@ class BcbMicrodadosLakeConverter:
                 res.skipped += 1
                 return
             df, partitions = _read_olinda(raw_file, dataset)
-            if writer.is_current(raw_file, partitions=partitions):
+            contrato = _contrato(dataset)
+            if writer.is_current(raw_file, partitions=partitions, contract=contrato):
                 res.skipped += 1
                 return
-            written = writer.write_polars(df, src=raw_file, partitions=partitions)
+            written = writer.write_polars(
+                df, src=raw_file, partitions=partitions, contract=contrato
+            )
         except Exception as exc:
             res.errors.append(f"Erro ao converter {dataset} {raw_file.name}: {exc}")
             return
@@ -744,8 +794,12 @@ class BcbMicrodadosLakeConverter:
                             pl.lit(mes).cast(pl.Int32).alias("mes"),
                         )
 
+                    contrato = _contrato(target_ds)
                     if writer.is_current(
-                        raw_file, partitions=partitions, file_key_name=key
+                        raw_file,
+                        partitions=partitions,
+                        file_key_name=key,
+                        contract=contrato,
                     ):
                         res.skipped += 1
                         continue
@@ -754,6 +808,7 @@ class BcbMicrodadosLakeConverter:
                         src=raw_file,
                         partitions=partitions,
                         file_key_name=key,
+                        contract=contrato,
                     )
                 if written.status == "skipped":
                     res.skipped += 1

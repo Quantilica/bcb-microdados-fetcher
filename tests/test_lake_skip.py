@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import builtins
 import hashlib
+import io
 import json
 import zipfile
 from pathlib import Path
@@ -11,7 +13,12 @@ import pytest
 
 pytest.importorskip("quantilica.analytics.lake")
 
+import polars as pl  # noqa: E402
+import pyarrow.parquet as pq  # noqa: E402
+import quantilica.analytics.lake as analytics_lake  # noqa: E402
 import quantilica.core.manifests as manifests  # noqa: E402
+from quantilica.analytics.lake import LakeWriter  # noqa: E402
+from quantilica.core.lake import DatasetDescriptor, composite_file_key  # noqa: E402
 
 import bcb_microdados_fetcher.lake as lake_mod  # noqa: E402
 from bcb_microdados_fetcher.lake import converter  # noqa: E402
@@ -257,3 +264,218 @@ def test_cosif_zip_novo_cai_no_caminho_completo(tmp_path: Path) -> None:
 
     assert not res.errors, res.errors
     assert res.converted == 1 and res.skipped == N_COSIF
+
+
+def _olinda_bruto(tmp_path: Path) -> Path:
+    raw = tmp_path / "raw"
+    pasta = raw / "pix_municipio_transacoes"
+    pasta.mkdir(parents=True)
+    (pasta / "pix_municipio_transacoes_2025-09.json").write_bytes(
+        (FIX / "pix_municipio_202509.json").read_bytes()
+    )
+    _sidecars(raw)
+    return raw
+
+
+@pytest.fixture
+def sem_abrir_csv_nem_json(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
+    """Devolve ``armar()``: depois dela, CSV/TXT/JSON do bruto não podem ser abertos.
+
+    Vigia ``builtins.open``, ``io.open`` e ``Path.open``. ZIP e sidecar podem (o
+    índice do ZIP é lido para saber os membros).
+    """
+
+    def vigia(original):  # noqa: ANN001, ANN202
+        def aberto(file, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
+            nome = str(file).lower() if isinstance(file, str | Path) else ""
+            if "/raw/" in nome and nome.endswith((".csv", ".txt", ".json")):
+                if not nome.endswith(".manifest.json"):
+                    raise AssertionError(f"bruto aberto: {file}")
+            return original(file, *args, **kwargs)
+
+        return aberto
+
+    def armar() -> None:
+        monkeypatch.setattr(builtins, "open", vigia(builtins.open))
+        monkeypatch.setattr(io, "open", vigia(io.open))
+        original_path_open = Path.open
+
+        def path_open(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
+            return vigia(lambda f, *a, **k: original_path_open(Path(f), *a, **k))(
+                self, *args, **kwargs
+            )
+
+        monkeypatch.setattr(Path, "open", path_open)
+
+    return armar
+
+
+def test_em_dia_nao_abre_csv_nem_json_do_bruto(
+    tmp_path: Path, sem_abrir_csv_nem_json, sem_hash_por_leitura: None
+) -> None:
+    raw = _scr_bruto(tmp_path)
+    (raw / "pix_municipio_transacoes").mkdir()
+    (
+        raw / "pix_municipio_transacoes" / "pix_municipio_transacoes_2025-09.json"
+    ).write_bytes((FIX / "pix_municipio_202509.json").read_bytes())
+    _sidecars(raw)
+    lake = tmp_path / "lake"
+    alvos = ["scr", "pix_municipio_transacoes"]
+    assert not converter.convert(raw, lake, datasets=alvos).errors
+
+    sem_abrir_csv_nem_json()
+    res = converter.convert(raw, lake, datasets=alvos)
+    assert (res.converted, res.skipped, res.errors) == (0, 4, [])
+
+
+def test_parquet_com_a_chave_do_zip_nao_da_o_zip_por_convertido(
+    tmp_path: Path,
+) -> None:
+    """Layout antigo: um Parquet com a chave do ZIP e o sha256 dele não pula o ZIP."""
+    raw, lake = _scr_bruto(tmp_path), tmp_path / "lake"
+    zip_ = raw / "scr" / "scrdata_2024@20261101.zip"
+    writer = LakeWriter(
+        lake / "bcb-microdados" / "scr",
+        DatasetDescriptor(
+            source_id="bcb-microdados",
+            dataset_id="scr",
+            alias="scr",
+            partition_keys=["ano", "mes"],
+            partition_types={"ano": "int", "mes": "int"},
+        ),
+    )
+    writer.write_polars(
+        pl.DataFrame({"x": [1]}),
+        src=zip_,
+        partitions={"ano": 2024, "mes": 1},
+        file_key_name=composite_file_key(zip_, None).lower(),
+    )
+
+    res = converter.convert(raw, lake, datasets=["scr"])
+
+    assert not res.errors, res.errors
+    assert res.converted == 3  # os dois membros do ZIP e o CSV solto
+
+
+def test_sha256_com_erro_de_es_no_csv_solto_vira_erro_da_tarefa(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw, lake = _scr_bruto(tmp_path), tmp_path / "lake"
+    converter.convert(raw, lake, datasets=["scr"])
+    original = lake_mod.sha256_file
+
+    def sha(path):  # noqa: ANN001, ANN202
+        if str(path).endswith(".csv"):
+            raise OSError(5, "Input/output error")
+        return original(path)
+
+    monkeypatch.setattr(lake_mod, "sha256_file", sha)
+    monkeypatch.setattr(analytics_lake, "sha256_file", sha)
+
+    res = converter.convert(raw, lake, datasets=["scr"])  # não levanta
+
+    assert any("scrdata_202403" in e for e in res.errors)
+    assert res.skipped == 2  # os membros do ZIP seguem pulados
+
+
+def test_conversao_interrompida_no_membro_de_um_zip_e_completada(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw, lake = _scr_bruto(tmp_path), tmp_path / "lake"
+    original = LakeWriter.write_polars
+
+    def cai_no_segundo_membro(self, data, src, **kw):  # noqa: ANN001, ANN003, ANN202
+        if str(kw.get("file_key_name", "")).endswith("scrdata_202402"):
+            raise RuntimeError("sem espaço em disco")
+        return original(self, data, src, **kw)
+
+    with monkeypatch.context() as m:
+        m.setattr(LakeWriter, "write_polars", cai_no_segundo_membro)
+        r1 = converter.convert(raw, lake, datasets=["scr"])
+    assert (r1.converted, len(r1.errors)) == (2, 1)
+
+    r2 = converter.convert(raw, lake, datasets=["scr"])
+    assert (r2.converted, r2.skipped, r2.errors) == (1, 2, [])
+    r3 = converter.convert(raw, lake, datasets=["scr"])
+    assert (r3.converted, r3.skipped, r3.errors) == (0, 3, [])
+
+
+def test_cosif_interrompido_num_grupo_e_completado(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw, lake = tmp_path / "raw", tmp_path / "lake"
+    build_raw(raw)
+    _sidecars(raw)
+    original = LakeWriter.write_group
+    chamadas: list[str] = []
+
+    def cai_no_terceiro(self, group_key, members, **kw):  # noqa: ANN001, ANN003, ANN202
+        chamadas.append(group_key)
+        if len(chamadas) == 3:
+            raise RuntimeError("kill")
+        return original(self, group_key, members, **kw)
+
+    with monkeypatch.context() as m:
+        m.setattr(LakeWriter, "write_group", cai_no_terceiro)
+        r1 = converter.convert(raw, lake, datasets=["cosif"])
+    assert len(r1.errors) == 1 and r1.converted < N_COSIF
+
+    r2 = converter.convert(raw, lake, datasets=["cosif"])
+    assert not r2.errors, r2.errors
+    assert r2.converted + r2.skipped == N_COSIF and r2.converted >= 1
+    r3 = converter.convert(raw, lake, datasets=["cosif"])
+    assert (r3.converted, r3.skipped, r3.errors) == (0, N_COSIF, [])
+
+
+def test_cosif_converter_version_nova_reconverte(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw, lake = tmp_path / "raw", tmp_path / "lake"
+    build_raw(raw)
+    converter.convert(raw, lake, datasets=["cosif"])
+    monkeypatch.setattr(lake_mod, "COSIF_CONVERTER_VERSION", "2")
+
+    r2 = converter.convert(raw, lake, datasets=["cosif"])
+    assert (r2.converted, r2.errors) == (N_COSIF, [])
+    r3 = converter.convert(raw, lake, datasets=["cosif"])
+    assert (r3.converted, r3.skipped) == (0, N_COSIF)
+
+
+def _versao_de_contrato(lake: Path, dataset: str) -> set[str | None]:
+    versoes = set()
+    for arq in (lake / "bcb-microdados" / dataset).rglob("*.parquet"):
+        meta = pq.ParquetFile(arq).metadata.metadata or {}
+        versoes.add(meta.get(b"quantilica.contract.version", b"").decode() or None)
+    return versoes
+
+
+@pytest.mark.parametrize(
+    ("bruto", "alvos", "esperado"),
+    [
+        (_scr_bruto, ["scr"], 3),
+        (_estban_bruto, ["estban_municipio", "estban_agencia"], 2),
+        (_olinda_bruto, ["pix_municipio_transacoes"], 1),
+    ],
+)
+def test_revisao_de_layout_nova_reconverte_uma_vez(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    leituras: list[str],
+    bruto,  # noqa: ANN001
+    alvos: list[str],
+    esperado: int,
+) -> None:
+    raw, lake = bruto(tmp_path), tmp_path / "lake"
+    r1 = converter.convert(raw, lake, datasets=alvos)
+    assert (r1.converted, r1.errors) == (esperado, [])
+    assert _versao_de_contrato(lake, alvos[0]) == {None}  # revisão 1: nada novo
+
+    monkeypatch.setattr(lake_mod, "LAYOUT_REVISION", 2)
+    r2 = converter.convert(raw, lake, datasets=alvos)
+    assert (r2.converted, r2.errors) == (esperado, [])
+    assert _versao_de_contrato(lake, alvos[0]) == {"2"}
+
+    leituras.clear()
+    r3 = converter.convert(raw, lake, datasets=alvos)
+    assert (r3.converted, r3.skipped, r3.errors) == (0, esperado, [])
+    assert leituras == []

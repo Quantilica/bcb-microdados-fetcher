@@ -9,6 +9,11 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ### Alterado
 - **Build do lake sem mudança não lê o bruto.** O sha256 vem do sidecar `.manifest.json` (`quantilica.analytics.lake.sha256_file`), e o que já está no lake com o mesmo sha256 é pulado antes de transcodificar o membro ou ler o JSON: `scr`, `estban_*` e os datasets do Olinda conferem o rodapé do Parquet em qualquer partição `ano=/mes=` (a partição só se conheceria lendo os dados); o `cosif` confere os membros e `is_current_group` de cada arquivo agrupado sem espiar o início de cada membro. Continuam abertos o índice dos ZIPs e, no `cosif`, o início do membro que não deixa registro no lake (mês sem dados). Uma tarefa `scr` não abre mais os brutos do `estban`, e os sidecars de manifesto são ignorados logo na descoberta.
+- **Revisão de layout do conversor.** `LAYOUT_REVISION` (1 hoje) cobre `scr`, `estban_*` e o Olinda, cujo Parquet só guardava o sha256 do bruto: a regra que deriva `ano`/`mes` não era conferida pelo build sem mudança. Subir a constante grava a revisão no rodapé (versão de contrato) e reconverte uma vez o que foi gravado com outra; na revisão 1 nada muda no lake. No `cosif`, a nota junto de `COSIF_CONVERTER_VERSION` diz quando subi-la (mudança de segmento, mês, esquema ou nome do grupo).
+- Piso do `quantilica-analytics` em 0.14.0 (sha256 pelo sidecar).
+
+### Corrigido
+- O atalho que dá um CSV solto por convertido sem abri-lo valia também para ZIP: um Parquet gravado com a chave do próprio ZIP (layout anterior) e o sha256 dele fazia o build pular os membros ainda não convertidos. Agora só vale para `.csv`/`.txt`, e um erro de E/S ao calcular o sha256 cai no caminho normal (erro da tarefa) em vez de derrubar o `convert`.
 - CI e infraestrutura alinhados ao template (fetcher-template v0.2.1).
 
 ## [0.6.0] - 2026-11-16
