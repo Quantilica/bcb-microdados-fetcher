@@ -11,6 +11,7 @@ import re
 import tempfile
 import unicodedata
 import zipfile
+from collections import Counter
 from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -284,6 +285,45 @@ def _em_dia(writer: LakeWriter, key: str, raw_file: Path) -> bool:
     )
 
 
+def _drop_superseded(
+    dataset_dir: Path, raw_file: Path, keep: set[str], dataset_id: str
+) -> list[Path]:
+    """Apaga o Parquet que uma versao anterior do mesmo bruto gravou com outra chave.
+
+    A chave do Parquet vem do nome do bruto e do membro: o BCB trocou o formato de
+    alguns meses (``x@2023.csv`` virou ``x@2026.zip``), e a chave passou de ``x`` para
+    ``x__x_csv``. A versao nova escreve a chave nova na mesma particao e o Parquet da
+    chave antiga ficaria em duplicidade (``versao_duplicada``) com a origem superada.
+    So sai o Parquet por membro deste dataset, de um bruto de mesma ``file_key`` (chave
+    sem extensao e sem carimbo), cuja chave nao esta em ``keep`` (as chaves de todos os
+    membros do bruto vigente). Devolve o que apagou.
+    """
+    base = file_key(raw_file).lower()
+    gone = []
+    for path in sorted(dataset_dir.glob(f"ano=*/mes=*/{glob.escape(base)}*.parquet")):
+        stem = path.stem
+        if stem in keep or not (stem == base or stem.startswith(f"{base}__")):
+            continue
+        try:
+            meta = footer_from_metadata(pq.ParquetFile(path).metadata)
+        except Exception:
+            logger.warning("%s: %s ilegivel; mantido", dataset_id, path)
+            continue
+        if (
+            meta.get("quantilica.source_id") != SOURCE_ID
+            or meta.get("quantilica.dataset_id") != dataset_id
+            or META_MEMBERS in meta
+            or meta.get("quantilica.file_key") != stem
+        ):
+            continue
+        path.unlink()
+        gone.append(path)
+        logger.warning(
+            "%s: %s de versao anterior de %s removido", dataset_id, path, raw_file.name
+        )
+    return gone
+
+
 def _convert_members(
     raw_file: Path,
     writer: LakeWriter,
@@ -535,6 +575,18 @@ class BcbMicrodadosLakeConverter:
         all_raw_files = [f for f in input_path.rglob("*") if f.is_file()]
         active_files = select_current(all_raw_files)
 
+        # Formatos gemeos de uma mesma publicacao (x@D.csv e x@D.zip) ficam os dois:
+        # um nao substitui o outro, entao a limpeza de chaves antigas nao se aplica.
+        gemeos = {
+            k
+            for k, n in Counter(
+                file_key(f).lower()
+                for f in active_files
+                if not f.name.endswith(".manifest.json")
+            ).items()
+            if n > 1
+        }
+
         cosif_files: list[Path] = []
         for raw_file in active_files:
             # Sidecar de manifesto não é dado (nenhum ramo o convertia).
@@ -556,7 +608,7 @@ class BcbMicrodadosLakeConverter:
             # 2. ESTBAN files
             elif "estban" in fname or "estban" in parent:
                 if "estban_municipio" in writers or "estban_agencia" in writers:
-                    self._convert_estban(raw_file, writers, res, lake_path)
+                    self._convert_estban(raw_file, writers, res, lake_path, gemeos)
             # 3. COSIF files
             elif (
                 "cosif" in fname
@@ -653,8 +705,16 @@ class BcbMicrodadosLakeConverter:
         writers: dict[str, LakeWriter],
         res: ConvertResult,
         lake_path: Path,
+        gemeos: frozenset[str] | set[str] = frozenset(),
     ) -> None:
-        """Convert ESTBAN files (município e agência) into long format."""
+        """Convert ESTBAN files (município e agência) into long format.
+
+        Um membro sem linhas (cabeçalho só) é gravado como Parquet vazio, com o
+        esquema: o bruto vigente é isso, e sem o Parquet o arquivo ficaria sem
+        cobertura e o Parquet da versão anterior, superado, sem ser substituído.
+        Depois de gravar, o Parquet que uma versão anterior do mesmo bruto deixou
+        com outra chave (CSV solto que virou ZIP) é removido.
+        """
         # municipio x agencia depende das colunas de cada membro; o writer e escolhido
         # por membro, entao o laco de membros fica aqui.
         try:
@@ -663,6 +723,8 @@ class BcbMicrodadosLakeConverter:
             res.errors.append(f"ESTBAN {raw_file.name}: ZIP ilegivel: {exc}")
             return
 
+        keep = {composite_file_key(raw_file, n).lower() for n in members}
+        limpar = file_key(raw_file).lower() not in gemeos
         digest = None
         for name in members:
             shown = name or raw_file.name
@@ -696,8 +758,6 @@ class BcbMicrodadosLakeConverter:
                         csv_path, ("#DATA_BASE", "#DATA", "DATA_BASE", "#")
                     )
                     lf = _scan(csv_path, skip_rows=skip, schema_overrides=_ESTBAN_TEXTO)
-                    if lf.head(1).collect().height == 0:
-                        continue
                     lf = lf.rename(
                         {
                             c: _norm_col(c.lstrip("#").strip())
@@ -750,10 +810,11 @@ class BcbMicrodadosLakeConverter:
                     id_cols = [c for c in cols if c in dim_candidates]
                     verbete_cols = [c for c in cols if c not in dim_candidates]
 
-                    if "data_base" in cols:
-                        ano, mes = _extract_year_month(_first_value(lf, "data_base"))
-                    else:
-                        ano, mes = _extract_year_month(shown)
+                    # Sem linhas não há data-base: o período vem do nome do membro.
+                    primeiro = (
+                        _first_value(lf, "data_base") if "data_base" in cols else None
+                    )
+                    ano, mes = _extract_year_month(primeiro or shown)
                     partitions = {"ano": ano, "mes": mes}
 
                     if verbete_cols:
@@ -802,6 +863,10 @@ class BcbMicrodadosLakeConverter:
                         contract=contrato,
                     ):
                         res.skipped += 1
+                        if limpar:
+                            _drop_superseded(
+                                writer.dataset_dir, raw_file, keep, target_ds
+                            )
                         continue
                     written = writer.write_polars(
                         lf_final,
@@ -810,6 +875,8 @@ class BcbMicrodadosLakeConverter:
                         file_key_name=key,
                         contract=contrato,
                     )
+                if limpar:
+                    _drop_superseded(writer.dataset_dir, raw_file, keep, target_ds)
                 if written.status == "skipped":
                     res.skipped += 1
                 else:
