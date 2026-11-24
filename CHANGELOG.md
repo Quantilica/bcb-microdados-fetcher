@@ -5,6 +5,14 @@ Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.6.2] - 2026-11-24
+
+### Corrigido
+
+- **ESTBAN: a troca de formato do bruto não deixa mais um Parquet duplicado.** O BCB republicou meses antigos (`2022-12`, `2023-01`, `2023-07`) como ZIP, com o mesmo conteúdo do CSV solto anterior. A chave do Parquet vem do nome do bruto e do membro (`x` para o CSV, `x__x_csv` para o membro do ZIP), então a versão nova gravava ao lado do Parquet antigo, na mesma partição, e a auditoria acusava `versao_duplicada` e `origem_superada`. Agora o conversor remove, por bruto, o Parquet por membro do mesmo bruto (mesma `file_key`, deste dataset) cuja chave o bruto vigente já não gera. A limpeza roda depois de todos os membros do bruto no lake e sem erro, e também na reexecução (em que cada membro só é pulado). Formatos gêmeos da mesma publicação (`x@D.csv` e `x@D.zip`) continuam os dois.
+- **ESTBAN: membro só com o cabeçalho vira Parquet vazio, com o esquema do arquivo com linhas.** Antes era pulado, e o arquivo vigente ficava sem Parquet (`sem_parquet`) enquanto o Parquet da versão anterior seguia no lake. `data_base`, `codmun` e `codmun_ibge` saem `Int64`, como nos meses com linhas (não `String`), então `scan_parquet` e o `union_by_name` do DuckDB leem a pasta junta. Sem linhas não há `data_base`: a partição vem do `AAAAMM` do nome do membro e, na falta dele, do nome do bruto; sem data em nenhum dos dois é erro (não cai mais em `ano=2000`).
+- **Download com data de geração anterior à da versão vigente é descartado (ESTBAN e COSIF).** O nome do bruto leva o carimbo do `Last-Modified` do servidor e a versão de carimbo mais novo é a vigente. Em 23/11/2026 o BCB sobrescreveu em lote arquivos de meses antigos com gerações anteriores às que já estavam no bruto (`Data de geracao dos dados` de 2023-10-16 contra 2024-03-21, por exemplo; um deles só com o cabeçalho), e a versão mais velha virava a vigente. O fetcher compara a linha `Data de geracao dos dados` do arquivo baixado com a da versão vigente do mesmo arquivo e descarta o download (e o sidecar do manifesto) se for anterior, com aviso no log. Sem a data em qualquer das duas, vale o download. Enquanto o servidor seguir servindo a geração antiga, o arquivo é baixado e descartado a cada execução.
+
 ## [0.6.1] - 2026-11-19
 
 ### Alterado
