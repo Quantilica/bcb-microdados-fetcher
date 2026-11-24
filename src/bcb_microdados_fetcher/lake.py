@@ -405,6 +405,22 @@ def _extract_year_month(val: Any) -> tuple[int, int]:
     return 2000, 1
 
 
+_PERIODO = re.compile(r"(?<!\d)((?:19|20)\d{2})[-_]?(0[1-9]|1[0-2])(?!\d)")
+
+
+def _periodo_do_nome(*nomes: str) -> tuple[int, int] | None:
+    """``(ano, mes)`` do primeiro nome com ``AAAAMM`` ou ``AAAA-MM``, ou ``None``.
+
+    Só vale a data inteira (mes de 01 a 12): sem ela não ha período a inferir, e
+    quem chama deve falhar em vez de cair num ano padrão.
+    """
+    for nome in nomes:
+        m = _PERIODO.search(nome.split("@")[0])  # o carimbo @AAAAMMDD não é período
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    return None
+
+
 def _identify_cosif_segmento(filename: str) -> str:
     """Identify COSIF segment from filename or path."""
     name_upper = filename.upper()
@@ -725,6 +741,9 @@ class BcbMicrodadosLakeConverter:
 
         keep = {composite_file_key(raw_file, n).lower() for n in members}
         limpar = file_key(raw_file).lower() not in gemeos
+        erros_antes = len(res.errors)
+        # Datasets (desta tarefa) em que algum membro do bruto está ou foi gravado.
+        tocados: set[str] = set()
         digest = None
         for name in members:
             shown = name or raw_file.name
@@ -750,6 +769,7 @@ class BcbMicrodadosLakeConverter:
                     if dono:
                         if any(ds in writers for ds in dono):
                             res.skipped += 1
+                            tocados.update(ds for ds in dono if ds in writers)
                         continue
                 with _member_as_utf8(
                     raw_file, name, ENCODINGS["estban_municipio"]
@@ -775,6 +795,7 @@ class BcbMicrodadosLakeConverter:
                     if target_ds not in writers:
                         continue
                     writer = writers[target_ds]
+                    tocados.add(target_ds)
 
                     if "agencia" in cols:
                         lf = lf.with_columns(
@@ -810,11 +831,33 @@ class BcbMicrodadosLakeConverter:
                     id_cols = [c for c in cols if c in dim_candidates]
                     verbete_cols = [c for c in cols if c not in dim_candidates]
 
-                    # Sem linhas não há data-base: o período vem do nome do membro.
                     primeiro = (
                         _first_value(lf, "data_base") if "data_base" in cols else None
                     )
-                    ano, mes = _extract_year_month(primeiro or shown)
+                    if primeiro:
+                        ano, mes = _extract_year_month(primeiro)
+                    else:
+                        # Sem linhas não há data-base: o período vem do nome do
+                        # membro e, na falta dele, do nome do bruto. Sem data em
+                        # nenhum dos dois não se adivinha a partição.
+                        periodo = _periodo_do_nome(shown, raw_file.name)
+                        if periodo is None:
+                            raise ValueError(
+                                "membro sem linhas e sem AAAAMM no nome do membro "
+                                "nem do bruto: partição não inferida"
+                            )
+                        ano, mes = periodo
+                        # Mesmos tipos do arquivo com linhas, onde a inferência
+                        # lê estas colunas como inteiro.
+                        lf = lf.with_columns(
+                            pl.col(
+                                [
+                                    c
+                                    for c in ("data_base", "codmun", "codmun_ibge")
+                                    if c in cols
+                                ]
+                            ).cast(pl.Int64, strict=False)
+                        )
                     partitions = {"ano": ano, "mes": mes}
 
                     if verbete_cols:
@@ -863,10 +906,6 @@ class BcbMicrodadosLakeConverter:
                         contract=contrato,
                     ):
                         res.skipped += 1
-                        if limpar:
-                            _drop_superseded(
-                                writer.dataset_dir, raw_file, keep, target_ds
-                            )
                         continue
                     written = writer.write_polars(
                         lf_final,
@@ -875,8 +914,6 @@ class BcbMicrodadosLakeConverter:
                         file_key_name=key,
                         contract=contrato,
                     )
-                if limpar:
-                    _drop_superseded(writer.dataset_dir, raw_file, keep, target_ds)
                 if written.status == "skipped":
                     res.skipped += 1
                 else:
@@ -885,6 +922,13 @@ class BcbMicrodadosLakeConverter:
                 res.errors.append(
                     f"Erro ao converter ESTBAN {shown} em {raw_file.name}: {exc}"
                 )
+
+        # Só depois de todos os membros do bruto no lake, sem erro: um membro que
+        # falhou ainda pode precisar do Parquet da versão anterior. Vale também na
+        # reexecução, em que cada membro já está no lake e o laço acima só pula.
+        if limpar and len(res.errors) == erros_antes:
+            for ds in sorted(tocados):
+                _drop_superseded(lake_path / self.source_id / ds, raw_file, keep, ds)
 
 
 @dataclass(frozen=True)
