@@ -11,6 +11,7 @@ from quantilica.core.registry import FetcherInfo
 from quantilica.core.sync import FreshnessPolicy
 
 from .catalog import GROUP_ALIASES, GROUPS, list_datasets
+from .geracao import manter_geracao_vigente
 from .storage import DataRepository
 
 resolve_groups = make_resolve_groups(
@@ -25,7 +26,15 @@ def path_builder(
     return DataRepository(output_dir).path_for_entry(entry, last_modified=last_modified)
 
 
-fetcher = FetcherApp(
+class BcbMicrodadosApp(FetcherApp):
+    """``FetcherApp`` que descarta download com data de geração anterior à vigente."""
+
+    def _download_file(self, url: str, output: Path, *args: Any, **kwargs: Any) -> Path:
+        saved = super()._download_file(url, output, *args, **kwargs)
+        return manter_geracao_vigente(Path(saved))
+
+
+fetcher = BcbMicrodadosApp(
     name="bcb-microdados",
     help="Microdados do Banco Central (SCR, ESTBAN, COSIF)",
     info=FetcherInfo(
