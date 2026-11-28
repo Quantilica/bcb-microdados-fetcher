@@ -41,6 +41,7 @@ __all__ = [
     "GROUP_ALIASES",
     "DiscoveryReport",
     "discover",
+    "group_failures",
     "list_datasets",
     "parse_documentos",
 ]
@@ -159,6 +160,12 @@ class DiscoveryReport:
     entries: dict[str, list[DatasetEntry]] = field(default_factory=dict)
     #: (grupo/pasta) cuja listagem falhou ou veio malformada.
     listing_errors: list[str] = field(default_factory=list)
+    #: falhas de listagem com a causa: ``(grupo, item, causa)``. Cada uma também
+    #: está em ``listing_errors`` (só o item). É o que o ``sync`` reporta.
+    failures: list[tuple[str, str, str]] = field(default_factory=list)
+    #: ``grupo/pasta`` cuja listagem respondeu bem, mas sem nenhum arquivo: a fonte
+    #: não tem arquivo ali (aviso, não falha).
+    empty_folders: list[str] = field(default_factory=list)
     #: itens da listagem sem período identificável (nome e data ausentes).
     unparsed: list[str] = field(default_factory=list)
     #: (base_id, ano, mes) com mais de um arquivo; escolhido o canônico.
@@ -171,6 +178,15 @@ class DiscoveryReport:
     @property
     def errors(self) -> int:
         return len(self.listing_errors) + len(self.unparsed)
+
+    def fail(self, group: str, item: str, cause: str) -> None:
+        """Registra uma falha de listagem do ``group`` (``item`` e a ``cause``)."""
+        self.listing_errors.append(item)
+        self.failures.append((group, item, cause))
+
+    def group_failures(self, group: str) -> list[str]:
+        """Falhas de listagem do ``group``, cada uma como ``item: causa``."""
+        return [f"{item}: {cause}" for g, item, cause in self.failures if g == group]
 
 
 def _periodo(item: dict[str, Any]) -> tuple[int, int] | None:
@@ -246,15 +262,25 @@ def parse_documentos(
     return entries
 
 
+def _describe(exc: BaseException) -> str:
+    """Causa legível: ``KeyError('tronco')`` vira ``KeyError: 'tronco'``."""
+    text = str(exc)
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
 def _discover_listing(
-    api: BcbMicrodadosClient, identificador: str, report: DiscoveryReport
+    api: BcbMicrodadosClient,
+    group: str,
+    identificador: str,
+    report: DiscoveryReport,
 ) -> tuple[str, str] | None:
     try:
         meta = api.get_conteudo_site(identificador)
         tronco, guid = meta["tronco"], meta["guidLista"]
     except Exception as exc:
-        logger.warning("BCB: conteudosite(%s) falhou: %s", identificador, exc)
-        report.listing_errors.append(f"conteudosite:{identificador}")
+        cause = _describe(exc)
+        logger.warning("BCB: conteudosite(%s) falhou: %s", identificador, cause)
+        report.fail(group, f"conteudosite:{identificador}", cause)
         return None
     return tronco, guid
 
@@ -301,7 +327,7 @@ def discover(
         ),
     ]
     for group, ident, pastas in plans:
-        loc = _discover_listing(api, ident, report)
+        loc = _discover_listing(api, group, ident, report)
         if loc is None:
             continue
         tronco, guid = loc
@@ -309,22 +335,53 @@ def discover(
             try:
                 items = api.list_documentos(tronco=tronco, guid_lista=guid, pasta=pasta)
             except Exception as exc:
-                logger.warning("BCB: listagem %s/%s falhou: %s", group, pasta, exc)
-                report.listing_errors.append(f"{group}/{pasta}")
+                cause = _describe(exc)
+                logger.warning("BCB: listagem %s/%s falhou: %s", group, pasta, cause)
+                report.fail(group, f"{group}/{pasta}", cause)
                 continue
             if not items:
+                # Resposta válida sem item algum: a fonte não tem arquivo nesta
+                # pasta. Não é falha (só se o grupo todo ficar sem arquivo).
                 logger.warning("BCB: listagem %s/%s vazia", group, pasta)
-                report.listing_errors.append(f"{group}/{pasta}:vazia")
+                report.empty_folders.append(f"{group}/{pasta}")
                 continue
-            report.entries[group].extend(
-                parse_documentos(
-                    items,
-                    group=group,
-                    base_id=base_id,
-                    name_prefix=name,
-                    extra=extra,
-                    report=report,
+            unparsed_before = len(report.unparsed)
+            parsed = parse_documentos(
+                items,
+                group=group,
+                base_id=base_id,
+                name_prefix=name,
+                extra=extra,
+                report=report,
+            )
+            novos = len(report.unparsed) - unparsed_before
+            if novos:
+                logger.warning(
+                    "BCB: listagem %s/%s: %d item(ns) sem período identificável",
+                    group,
+                    pasta,
+                    novos,
                 )
+            if not parsed and novos:
+                # Há arquivos, mas nenhum com nome/data que o parser entenda:
+                # o formato da listagem mudou.
+                report.fail(
+                    group,
+                    f"{group}/{pasta}",
+                    f"{novos} item(ns) sem período identificável no nome nem na "
+                    "data (formato da listagem mudou?)",
+                )
+                continue
+            report.entries[group].extend(parsed)
+        if not report.entries[group] and not report.group_failures(group):
+            # Todas as pastas responderam, nenhuma com arquivo: o grupo ficaria
+            # vazio sem erro nenhum. O BCB mantém a série há anos; tratar como
+            # catálogo que quebrou, não como "nada a baixar".
+            report.fail(
+                group,
+                group,
+                f"a listagem respondeu, mas nenhuma das {len(pastas)} pasta(s) "
+                "tem arquivo",
             )
 
     if scr:
@@ -384,6 +441,29 @@ def last_discovery() -> DiscoveryReport | None:
 
 def _discovery_enabled() -> bool:
     return os.environ.get("BCB_DISCOVER", "1") not in ("0", "false", "no")
+
+
+#: grupos sem catálogo estático: só a descoberta os produz.
+_GRUPOS_SO_POR_DESCOBERTA = ("estban", "cosif")
+
+
+def group_failures(group: str) -> list[str]:
+    """Falhas de descoberta do ``group`` (nome canônico ou apelido), ``item: causa``.
+
+    Vazio quando a descoberta deu certo para o grupo (inclusive quando a fonte
+    não tem arquivo numa pasta). ESTBAN e COSIF só existem por descoberta: com ela
+    desligada (``BCB_DISCOVER=0``) o grupo pedido não tem catálogo, e isso é
+    falha, não "nada a baixar".
+    """
+    canon = GROUP_ALIASES.get(group, group)
+    if _REPORT is not None:
+        return _REPORT.group_failures(canon)
+    if canon in _GRUPOS_SO_POR_DESCOBERTA and not _discovery_enabled():
+        return [
+            f"{canon}: descoberta desligada (BCB_DISCOVER), "
+            "o grupo não tem catálogo estático"
+        ]
+    return []
 
 
 def _group_entries(group: str) -> list[dict[str, Any]]:

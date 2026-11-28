@@ -7,6 +7,12 @@ sobrescreveu em lote (``Last-Modified`` com poucos segundos de diferença) arqui
 meses antigos com gerações anteriores às que já estavam no bruto: o carimbo novo
 fazia a versão mais velha virar a vigente. Aqui o download é descartado quando a
 geração dele é anterior à da versão vigente do mesmo arquivo.
+
+O arquivo sai, mas o sidecar do manifesto fica: com o arquivo ausente e o sidecar
+presente, a checagem de frescor do core (``Last-Modified`` e tamanho, ou ``ETag``)
+dá o download por em dia sem recriar o arquivo. Sem o sidecar o servidor, que segue
+servindo a mesma geração antiga com o mesmo ``Last-Modified``, seria baixado e
+descartado a cada execução.
 """
 
 from __future__ import annotations
@@ -78,8 +84,9 @@ def manter_geracao_vigente(path: Path) -> Path:
     """Descarta ``path`` se a geração dele é anterior à da versão vigente.
 
     Devolve ``path`` quando vale, ou a versão vigente quando o download foi
-    descartado (o arquivo e o sidecar do manifesto saem). Sem data de geração em
-    qualquer das duas, ou sem versão anterior, vale o download.
+    descartado (o arquivo sai; o sidecar do manifesto fica, ver o topo do módulo).
+    Sem data de geração em qualquer das duas, ou sem versão anterior, vale o
+    download.
     """
     anterior = versao_vigente_anterior(path)
     if anterior is None:
@@ -89,12 +96,11 @@ def manter_geracao_vigente(path: Path) -> Path:
         return path
     logger.warning(
         "%s: data de geração %s anterior à da versão vigente %s (%s); "
-        "download descartado",
+        "download descartado (o servidor segue com a geração antiga)",
         path.name,
         nova,
         vigente,
         anterior.name,
     )
     path.unlink(missing_ok=True)
-    Path(f"{path}{_SIDECAR}").unlink(missing_ok=True)
     return anterior

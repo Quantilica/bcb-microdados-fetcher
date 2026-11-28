@@ -7,8 +7,10 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import httpx2
 import pytest
 from quantilica.cli.sdk import FetcherApp
+from quantilica.core.http import HttpClient
 
 from bcb_microdados_fetcher.geracao import (
     data_geracao,
@@ -55,12 +57,13 @@ def test_versao_vigente_anterior_pega_o_carimbo_mais_novo_abaixo(
     assert versao_vigente_anterior(primeiro) is None
 
 
-def test_geracao_anterior_e_descartada_com_o_sidecar(tmp_path: Path) -> None:
+def test_geracao_anterior_e_descartada_e_o_sidecar_fica(tmp_path: Path) -> None:
     vigente = _arquivo(tmp_path, "estban_agencia_2023-06@20240201.zip", "2024-02-01")
     novo = _arquivo(tmp_path, "estban_agencia_2023-06@20261123.zip", "2023-10-16")
     assert manter_geracao_vigente(novo) == vigente
     assert not novo.exists()
-    assert not Path(f"{novo}.manifest.json").exists()
+    # o sidecar segue: é ele que dá o download por em dia nas próximas execuções
+    assert Path(f"{novo}.manifest.json").exists()
     assert vigente.exists() and Path(f"{vigente}.manifest.json").exists()
 
 
@@ -103,3 +106,44 @@ def test_fetcher_descarta_o_download_regressivo(
 
     saida = tmp_path / "estban_agencia_2023-05@20261123.zip"
     assert fetcher._download_file("http://x/z.zip", saida) == saida  # sem anterior
+
+
+def test_geracao_antiga_servida_de_novo_nao_baixa_todo_dia(tmp_path: Path) -> None:
+    """Fluxo real do core (transporte simulado, sem mock do download).
+
+    O servidor segue servindo a geração antiga com o mesmo ``Last-Modified``. O
+    primeiro download é descartado; o seguinte tem de ser dado por em dia pelo
+    sidecar, sem outro GET.
+    """
+    vigente = _arquivo(tmp_path, "estban_agencia_2023-06@20240201.zip", "2024-02-01")
+    antigo = _arquivo(tmp_path, "origem.zip", "2023-10-16")
+    corpo = antigo.read_bytes()
+    antigo.unlink()
+    Path(f"{antigo}.manifest.json").unlink()
+    gets: list[str] = []
+
+    def servidor(request: httpx2.Request) -> httpx2.Response:
+        cab = {
+            "Last-Modified": "Mon, 23 Nov 2026 12:00:00 GMT",
+            "Content-Type": "application/zip",
+        }
+        if request.method == "GET":
+            gets.append(str(request.url))
+            return httpx2.Response(200, content=corpo, headers=cab)
+        return httpx2.Response(200, headers={**cab, "Content-Length": str(len(corpo))})
+
+    cliente = HttpClient(transport=httpx2.MockTransport(servidor), attempts=1)
+    destino = tmp_path / "estban_agencia_2023-06@20261123.zip"
+    antes = fetcher.client
+    fetcher.client = cliente
+    try:
+        assert fetcher._download_file("http://x/y.zip", destino) == vigente
+        assert len(gets) == 1
+        assert not destino.exists()
+        for _ in range(2):  # "dias" seguintes: mesmo Last-Modified, mesmo tamanho
+            fetcher._download_file("http://x/y.zip", destino)
+        assert len(gets) == 1  # nenhum GET novo
+        assert not destino.exists()  # e o arquivo descartado não volta
+    finally:
+        fetcher.client = antes
+        cliente.close()

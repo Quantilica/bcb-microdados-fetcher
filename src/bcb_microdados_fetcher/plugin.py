@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -10,9 +11,11 @@ from quantilica.cli.sdk import FetcherApp, make_resolve_groups
 from quantilica.core.registry import FetcherInfo
 from quantilica.core.sync import FreshnessPolicy
 
-from .catalog import GROUP_ALIASES, GROUPS, list_datasets
+from .catalog import GROUP_ALIASES, GROUPS, group_failures, list_datasets
 from .geracao import manter_geracao_vigente
 from .storage import DataRepository
+
+logger = logging.getLogger(__name__)
 
 resolve_groups = make_resolve_groups(
     GROUPS, {alias: [canon] for alias, canon in GROUP_ALIASES.items()}
@@ -27,7 +30,56 @@ def path_builder(
 
 
 class BcbMicrodadosApp(FetcherApp):
-    """``FetcherApp`` que descarta download com data de geração anterior à vigente."""
+    """``FetcherApp`` do BCB.
+
+    - Descarta download com data de geração anterior à da versão vigente.
+    - Faz a falha de descoberta de um grupo pedido (listagem do ESTBAN ou do COSIF
+      fora do ar, ``identificador`` mudado, formato novo) contar como erro do
+      ``sync``: sem isso o grupo ficava sem arquivo e a saída era 0.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        #: grupo -> falhas de descoberta vistas ao listar os grupos pedidos.
+        self._falhas_descoberta: dict[str, list[str]] = {}
+        self.list_datasets = self.listar_grupo
+
+    def listar_grupo(self, group: str) -> list[dict[str, Any]]:
+        """``list_datasets`` que anota as falhas de descoberta do grupo pedido."""
+        entries = list_datasets(group)
+        falhas = group_failures(group)
+        canon = GROUP_ALIASES.get(group, group)
+        if falhas:
+            self._falhas_descoberta[canon] = falhas
+            for falha in falhas:
+                logger.error("BCB: descoberta do grupo %s falhou: %s", canon, falha)
+        else:
+            self._falhas_descoberta.pop(canon, None)
+        return entries
+
+    def download_datasets(
+        self,
+        entries: list[dict[str, Any]],
+        output_dir: Path,
+        workers: int = 4,
+        *,
+        force: bool = False,
+    ) -> tuple[int, int, list[tuple[str, str]]]:
+        """Baixa as entradas e soma, aos erros, as falhas de descoberta pendentes.
+
+        Cada grupo com falha de descoberta entra como um erro ``descoberta:<grupo>``
+        com as causas: o ``sync`` sai 3 (algo baixou) ou 1 (nada baixou) e o
+        ``--summary-json`` traz o grupo e a causa.
+        """
+        falhas, self._falhas_descoberta = self._falhas_descoberta, {}
+        downloaded, total, errors = super().download_datasets(
+            entries, output_dir, workers, force=force
+        )
+        erros_descoberta = [
+            (f"descoberta:{grupo}", "; ".join(causas))
+            for grupo, causas in sorted(falhas.items())
+        ]
+        return downloaded, total + len(erros_descoberta), errors + erros_descoberta
 
     def _download_file(self, url: str, output: Path, *args: Any, **kwargs: Any) -> Path:
         saved = super()._download_file(url, output, *args, **kwargs)

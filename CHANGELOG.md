@@ -5,6 +5,22 @@ Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [Não lançado]
+
+### Corrigido
+
+- **Falha de descoberta do ESTBAN e do COSIF não zera mais o grupo com saída 0.** A listagem do BCB (`conteudosite` e `Documentos/byListGuid`) registrava a falha em `DiscoveryReport.listing_errors` e ninguém a lia: com o endpoint em 5xx, o `identificador` mudado ou um formato novo, o grupo ficava sem entrada e o `sync` saía 0 com 0 arquivos, só com aviso. Agora cada falha guarda a causa (`DiscoveryReport.failures`; `group_failures(grupo)` as devolve como `item: causa`) e o `sync` conta uma falha por grupo pedido como erro `descoberta:<grupo>` (a causa na mensagem, também no `--summary-json`): sai 3 se outros grupos baixaram e 1 se nada baixou, com uma linha em ERROR com o grupo e a causa. Contam como falha: `conteudosite` fora do ar ou sem `tronco`/`guidLista`; listagem de uma pasta com erro HTTP ou fora do formato `{"conteudo": [...]}`; pasta com arquivos em que nenhum tem período identificável (formato novo); grupo cujas pastas responderam todas sem arquivo; e ESTBAN/COSIF pedidos com a descoberta desligada (`BCB_DISCOVER=0`), que não têm catálogo estático. Pasta isolada que responde válida e sem item continua sendo só aviso (a fonte não tem arquivo ali). O erro só vale para os grupos pedidos (`--from-plan` não lista, e não conta). `check` e `sync --dry-run` registram a falha em ERROR, mas o código de saída deles não muda.
+- **Download descartado por geração anterior não se repete todo dia.** O descarte (0.6.2) apagava o arquivo e o sidecar do manifesto; o servidor segue servindo a geração antiga com o mesmo `Last-Modified`, então o nome com o carimbo do dia seguinte não existia e o frescor baixava de novo, e descartava de novo, a cada execução. O arquivo continua saindo, mas o sidecar fica: com o arquivo ausente e o sidecar presente, o core dá o download por em dia (mesmo tamanho e `Last-Modified` não mais novo, ou mesmo `ETag`) sem recriar o arquivo. Se o BCB republicar com `Last-Modified` novo, baixa de novo e vale a regra da geração.
+- O cliente de descoberta (`BcbMicrodadosClient`) usa o cliente padrão do host quando ele está instalado (respeita `QUANTILICA_HTTP_*`, `QUANTILICA_SSL_VERIFY` e o bundle de CA) e, sem o host, um cliente do core com a verificação TLS lida do ambiente. Antes era um `HttpClient()` sem nada disso.
+
+### Removido
+
+- `BcbMicrodadosClient.download_file`: chamava `download_with_manifest` com `manifest_path=` (que não existe) e sem `source_id`, `dataset_id` e `producer`, isto é, `TypeError` certo na chamada real; o teste mockava o método. Nada a usava: o download é do `sync` do host.
+
+### Adicionado
+
+- Testes: descoberta com falha x pasta vazia válida x formato novo x grupo sem arquivo; `sync` com falha de descoberta (saída 1 e 3, `--summary-json`, apelido de grupo, grupo não pedido); cliente padrão do host e plano B sem o host; frescor depois do descarte por geração com transporte simulado, sem mock do core.
+
 ## [0.6.2] - 2026-11-24
 
 ### Corrigido

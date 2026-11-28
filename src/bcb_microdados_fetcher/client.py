@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
 from typing import Any
 
-from quantilica.core.http import HttpClient, HttpStatusError
+from quantilica.core.http import HttpClient, HttpStatusError, resolve_verify_from_env
 from quantilica.core.logging import get_logger
-from quantilica.core.manifests import DownloadManifest
 
 from .constants import (
     BCB_CONTEUDO_URL,
@@ -19,8 +17,17 @@ from .constants import (
 logger = get_logger(__name__)
 
 
+def _default_http_client() -> HttpClient:
+    """Cliente padrão do host (``QUANTILICA_HTTP_*``, SSL, CA), com plano B do core."""
+    try:
+        from quantilica.cli.sdk import default_client
+    except ImportError:  # CLI autônoma, sem o host instalado
+        return HttpClient(verify=resolve_verify_from_env(), emulate_browser=True)
+    return default_client()
+
+
 class BcbMicrodadosClient:
-    """Client for discovering and downloading BCB microdata files."""
+    """Client for discovering BCB microdata files (o download é do ``sync`` do host)."""
 
     def __init__(
         self,
@@ -28,7 +35,7 @@ class BcbMicrodadosClient:
         client: HttpClient | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
-        self.client = client or HttpClient()
+        self.client = client or _default_http_client()
         self.logger = logger or get_logger(__name__)
 
     def get_conteudo_site(self, identificador: str) -> dict[str, Any]:
@@ -101,17 +108,3 @@ class BcbMicrodadosClient:
         if not isinstance(value, list):
             return None
         return bool(value)
-
-    def download_file(
-        self,
-        url: str,
-        dest: Path,
-        *,
-        manifest_path: Path | None = None,
-    ) -> DownloadManifest:
-        """Download file with SHA-256 manifest sidecar."""
-        return self.client.download_with_manifest(
-            url,
-            dest,
-            manifest_path=manifest_path,
-        )

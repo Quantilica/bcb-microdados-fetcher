@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
-from quantilica.core.manifests import DownloadManifest
+from unittest.mock import patch
 
 from bcb_microdados_fetcher.client import BcbMicrodadosClient
 
@@ -40,12 +38,18 @@ def test_list_documentos() -> None:
         assert docs[0]["Nome"] == "202606BANCOS.csv.zip"
 
 
-def test_download_file(tmp_path) -> None:
+def test_cliente_padrao_e_o_do_host(monkeypatch) -> None:
+    """Sem ``client=``, vale o ``default_client()`` do host (``QUANTILICA_HTTP_*``)."""
+    monkeypatch.setenv("QUANTILICA_HTTP_ATTEMPTS", "2")
+    monkeypatch.setenv("QUANTILICA_HTTP_TIMEOUT", "7")
     client = BcbMicrodadosClient()
-    target = tmp_path / "test.zip"
-    mock_manifest = MagicMock(spec=DownloadManifest)
-    with patch.object(
-        client.client, "download_with_manifest", return_value=mock_manifest
-    ):
-        res = client.download_file("https://bcb/test.zip", target)
-        assert res == mock_manifest
+    assert client.client.attempts == 2
+    assert client.client.timeout == 7
+
+
+def test_cliente_padrao_sem_host_respeita_ssl_do_ambiente(monkeypatch) -> None:
+    import sys
+
+    monkeypatch.setitem(sys.modules, "quantilica.cli.sdk", None)  # host ausente
+    monkeypatch.setenv("QUANTILICA_SSL_VERIFY", "0")
+    assert BcbMicrodadosClient().client.verify is False

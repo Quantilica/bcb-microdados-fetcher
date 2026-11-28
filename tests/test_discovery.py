@@ -12,6 +12,7 @@ from quantilica.core.http import HttpStatusError
 
 from bcb_microdados_fetcher import catalog
 from bcb_microdados_fetcher.client import BcbMicrodadosClient
+from bcb_microdados_fetcher.constants import ESTBAN_IDENTIFICADOR
 
 FIX = Path(__file__).parent / "fixtures" / "listagens"
 
@@ -178,3 +179,135 @@ def test_olinda_inconclusivo_mantem_o_mes_e_conta() -> None:
         "pix_municipio_transacoes",
         "scr_sub_regiao",
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Falha de listagem x fonte sem arquivo (ESTBAN e COSIF)
+# --------------------------------------------------------------------------- #
+
+
+class _FakeListagem(FakeHttp):
+    """FakeHttp com as respostas da listagem trocáveis pelo teste."""
+
+    def __init__(
+        self,
+        *,
+        vazias: set[str] | None = None,
+        todas_vazias: bool = False,
+        docs: dict[str, list[dict]] | None = None,
+        conteudo: dict | None = None,
+        **kw,
+    ) -> None:
+        super().__init__(**kw)
+        self.vazias = vazias or set()
+        self.todas_vazias = todas_vazias
+        self.docs = docs or {}
+        self.conteudo = conteudo
+
+    def get_json(self, url: str, params: dict | None = None):
+        params = params or {}
+        if url.endswith("conteudosite") and self.conteudo is not None:
+            return self.conteudo
+        if "olinda.bcb.gov.br" not in url and not url.endswith("conteudosite"):
+            pasta = params["pasta"]
+            if pasta in self.docs:
+                return {"conteudo": self.docs[pasta]}
+            if self.todas_vazias or pasta in self.vazias:
+                return {"conteudo": []}
+            if not (FIX / f"docs_{pasta}.json").exists():
+                return {"conteudo": []}  # pasta sem fixture: a fonte não tem arquivo
+        return super().get_json(url, params)
+
+
+def _api_listagem(**kw) -> BcbMicrodadosClient:
+    return BcbMicrodadosClient(client=_FakeListagem(**kw))  # type: ignore[arg-type]
+
+
+def test_listagem_saudavel_nao_tem_falha() -> None:
+    rep = catalog.discover(_api_listagem())
+    assert rep.failures == []
+    assert rep.group_failures("estban") == rep.group_failures("cosif") == []
+
+
+def test_pasta_vazia_valida_nao_e_falha() -> None:
+    """Resposta válida sem item: a fonte não tem arquivo ali; aviso, não erro."""
+    rep = catalog.discover(_api_listagem())
+    # 6 das 8 pastas do COSIF não têm fixture e respondem lista vazia
+    assert "cosif/Cooperativas-de-credito" in rep.empty_folders
+    assert len(rep.empty_folders) == 6
+    assert "cosif/Cooperativas-de-credito" not in rep.listing_errors
+    assert rep.group_failures("cosif") == []
+    assert rep.entries["cosif"]  # as pastas com arquivo seguem
+
+
+def test_conteudosite_fora_do_ar_e_falha_com_a_causa() -> None:
+    rep = catalog.discover(_api_listagem(no_conteudo={ESTBAN_IDENTIFICADOR}))
+    assert rep.entries["estban"] == []
+    (falha,) = rep.group_failures("estban")
+    assert falha.startswith(f"conteudosite:{ESTBAN_IDENTIFICADOR}: ")
+    assert "503" in falha
+    assert rep.group_failures("cosif") == []  # o outro grupo não é afetado
+
+
+def test_identificador_mudado_e_falha() -> None:
+    """A resposta é JSON válido, mas sem ``tronco``/``guidLista``."""
+    rep = catalog.discover(_api_listagem(conteudo={"conteudo": []}))
+    for grupo, ident in (("estban", ESTBAN_IDENTIFICADOR), ("cosif", "cosif")):
+        (falha,) = rep.group_failures(grupo)
+        assert falha.startswith(f"conteudosite:{ident}: KeyError")
+        assert rep.entries[grupo] == []
+
+
+def test_listagem_de_pasta_com_erro_http_e_falha() -> None:
+    rep = catalog.discover(_api())  # sem fixture de 6 pastas do COSIF: 404
+    falhas = rep.group_failures("cosif")
+    assert len(falhas) == 6
+    assert any(f.startswith("cosif/Cooperativas-de-credito: ") for f in falhas)
+    assert "404" in falhas[0]
+    assert rep.group_failures("estban") == []
+
+
+def test_formato_novo_sem_periodo_identificavel_e_falha() -> None:
+    itens = [
+        {"Nome": "relatorio-final.csv", "Url": "https://bcb/x.csv"},
+        {"Nome": "outro.csv", "Url": "https://bcb/y.csv", "DataDocumento": "?"},
+    ]
+    rep = catalog.discover(_api_listagem(docs={"municipio": itens}))
+    (falha,) = rep.group_failures("estban")
+    assert falha.startswith("estban/municipio: 2 item(ns) sem período identificável")
+    assert rep.entries["estban"]  # a pasta "agencia" segue
+    assert rep.unparsed == [
+        "estban_municipio:relatorio-final.csv",
+        "estban_municipio:outro.csv",
+    ]
+
+
+def test_grupo_inteiro_sem_arquivo_e_falha() -> None:
+    """Todas as pastas respondem vazio: o grupo não pode sumir sem erro."""
+    rep = catalog.discover(_api_listagem(todas_vazias=True))
+    for grupo in ("estban", "cosif"):
+        (falha,) = rep.group_failures(grupo)
+        assert falha.startswith(f"{grupo}: a listagem respondeu, mas nenhuma das ")
+        assert rep.entries[grupo] == []
+
+
+def test_group_failures_sem_descoberta_so_vale_para_estban_e_cosif(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(catalog, "_REPORT", None)  # BCB_DISCOVER=0 nos testes
+    for grupo in ("estban", "cosif", "estatistica_bancaria", "bancos"):
+        (falha,) = catalog.group_failures(grupo)
+        assert "descoberta desligada" in falha
+    assert catalog.group_failures("scr") == []
+    assert catalog.group_failures("pix") == []
+
+
+def test_group_failures_serve_a_descoberta_com_apelido(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        catalog, "_REPORT", catalog.discover(_api_listagem(no_conteudo={"cosif"}))
+    )
+    assert catalog.group_failures("cosif") == catalog.group_failures("balancetes")
+    assert catalog.group_failures("cosif")
+    assert catalog.group_failures("estban") == []
