@@ -147,3 +147,90 @@ def test_geracao_antiga_servida_de_novo_nao_baixa_todo_dia(tmp_path: Path) -> No
     finally:
         fetcher.client = antes
         cliente.close()
+
+
+def _servidor_geracao_antiga(corpo: bytes, gets: list[str]) -> HttpClient:
+    def servidor(request: httpx2.Request) -> httpx2.Response:
+        cab = {
+            "Last-Modified": "Mon, 23 Nov 2026 12:00:00 GMT",
+            "Content-Type": "application/zip",
+        }
+        if request.method == "GET":
+            gets.append(str(request.url))
+            return httpx2.Response(200, content=corpo, headers=cab)
+        return httpx2.Response(200, headers={**cab, "Content-Length": str(len(corpo))})
+
+    return HttpClient(transport=httpx2.MockTransport(servidor), attempts=1)
+
+
+_ENTRADA = {
+    "id": "estban_agencia_2023_06",
+    "base_id": "estban_agencia",
+    "name": "ESTBAN agência (2023-06)",
+    "url": "http://x/y.zip",
+    "ext": "zip",
+    "group": "estban",
+    "year": 2023,
+    "month": 6,
+}
+
+
+def test_check_diz_geracao_descartada_so_depois_do_descarte(tmp_path: Path) -> None:
+    """Modo de plano: o ``check`` dá ao plano um motivo de política.
+
+    Sem ele, quem reclassifica o plano por histórico trata o caminho do dia (que
+    nunca teve versão) como novo e o ``sync --from-plan --force`` baixa todo dia.
+    """
+    pasta = tmp_path / "estban"
+    pasta.mkdir()
+    _arquivo(pasta, "estban_agencia_2023-06@20240201.zip", "2024-02-01")
+    modelo = _arquivo(pasta, "origem.zip", "2023-10-16")
+    corpo = modelo.read_bytes()
+    modelo.unlink()
+    Path(f"{modelo}.manifest.json").unlink()
+    gets: list[str] = []
+    cliente = _servidor_geracao_antiga(corpo, gets)
+    antes = fetcher.client
+    fetcher.client = cliente
+    try:
+        # antes de qualquer download: não há nada local do carimbo do dia
+        item = fetcher.check_entry(dict(_ENTRADA), tmp_path)
+        assert (item.action, item.reason) == ("download", "not-present")
+
+        destino = Path(item.local_path)
+        fetcher._download_file(_ENTRADA["url"], destino)  # baixa e descarta
+        assert not destino.exists() and Path(f"{destino}.manifest.json").exists()
+
+        item = fetcher.check_entry(dict(_ENTRADA), tmp_path)
+        assert (item.action, item.reason) == ("skip-up-to-date", "geracao-descartada")
+        assert item.local_exists  # o sidecar conta
+        assert len(gets) == 1
+    finally:
+        fetcher.client = antes
+        cliente.close()
+
+
+def test_check_sem_versao_anterior_mantem_o_motivo_do_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sidecar sem arquivo e sem versão anterior (retenção comum) não é descarte."""
+    pasta = tmp_path / "estban"
+    pasta.mkdir()
+    modelo = _arquivo(pasta, "origem.zip", "2023-10-16")
+    corpo = modelo.read_bytes()
+    modelo.unlink()
+    Path(f"{modelo}.manifest.json").unlink()
+    gets: list[str] = []
+    cliente = _servidor_geracao_antiga(corpo, gets)
+    antes = fetcher.client
+    fetcher.client = cliente
+    try:
+        item = fetcher.check_entry(dict(_ENTRADA), tmp_path)
+        destino = Path(item.local_path)
+        fetcher._download_file(_ENTRADA["url"], destino)
+        destino.unlink()  # retenção efêmera: só o sidecar
+        item = fetcher.check_entry(dict(_ENTRADA), tmp_path)
+        assert (item.action, item.reason) == ("skip-up-to-date", "manifest-fresh")
+    finally:
+        fetcher.client = antes
+        cliente.close()

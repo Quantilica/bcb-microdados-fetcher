@@ -150,3 +150,68 @@ def test_falha_nao_vaza_para_o_download_seguinte(
     fetcher.download_datasets([], tmp_path)
     assert fetcher._falhas_descoberta == {}
     assert fetcher.download_datasets([], tmp_path) == (0, 0, [])
+
+
+def test_check_com_falha_de_descoberta_sai_1_e_nao_grava_plano(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Modo de plano: sem isto o ``check`` saía 0 e o ``sync --from-plan`` também."""
+    _descoberta(monkeypatch, no_conteudo={ESTBAN_IDENTIFICADOR})
+    plano = tmp_path / "plano.json"
+    res = runner.invoke(
+        app, ["check", "-o", str(tmp_path / "bruto"), "--out", str(plano)]
+    )
+    assert res.exit_code == 1
+    assert not plano.exists()
+    assert fetcher._falhas_descoberta == {}  # consumidas
+
+
+def test_dois_processos_check_e_sync_from_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _download_simulado: list[str]
+) -> None:
+    """``check --out`` (processo 1) e ``sync --from-plan`` (processo 2) sem falha."""
+    from quantilica.cli.sdk import CheckPlanItem
+
+    def verifica(self: Any, entry: dict, output_dir: Path) -> CheckPlanItem:
+        return CheckPlanItem(
+            dataset=entry["group"], id=entry["id"], url=entry["url"], partition=None,
+            local_path=str(output_dir / entry["id"]), remote_etag=None,
+            remote_last_modified=None, remote_size=None, local_exists=False,
+            action="download", reason="not-present", entry=dict(entry),
+        )  # fmt: skip
+
+    monkeypatch.setattr(FetcherApp, "check_entry", verifica)
+    _descoberta(monkeypatch)
+    plano = tmp_path / "plano.json"
+    res = runner.invoke(
+        app, ["check", "estban", "-o", str(tmp_path), "--out", str(plano)]
+    )
+    assert res.exit_code == 0 and plano.exists()
+
+    fetcher._falhas_descoberta.clear()  # outro processo: estado novo
+    monkeypatch.setattr(catalog, "_REPORT", None)
+    res = runner.invoke(
+        app, ["sync", "--from-plan", str(plano), "--force", "-o", str(tmp_path)]
+    )
+    assert res.exit_code == 0
+    assert _download_simulado  # as entradas do plano baixaram
+
+
+def test_check_so_olha_os_grupos_pedidos(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from quantilica.cli.sdk import CheckPlan
+
+    monkeypatch.setattr(
+        FetcherApp,
+        "check_datasets",
+        lambda self, entries, output_dir, workers=4: CheckPlan(
+            fetcher="bcb-microdados",
+            output_dir=str(output_dir),
+            generated_at="",
+            items=[],
+        ),
+    )
+    _descoberta(monkeypatch, no_conteudo={ESTBAN_IDENTIFICADOR})
+    res = runner.invoke(app, ["check", "cosif", "-o", str(tmp_path)])
+    assert res.exit_code == 0

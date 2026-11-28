@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from quantilica.cli.sdk import FetcherApp, make_resolve_groups
+import typer
+from quantilica.cli.sdk import CheckPlan, CheckPlanItem, FetcherApp, make_resolve_groups
 from quantilica.core.registry import FetcherInfo
 from quantilica.core.sync import FreshnessPolicy
 
 from .catalog import GROUP_ALIASES, GROUPS, group_failures, list_datasets
-from .geracao import manter_geracao_vigente
+from .geracao import manter_geracao_vigente, versao_vigente_anterior
 from .storage import DataRepository
 
 logger = logging.getLogger(__name__)
+
+#: motivo (``skip-up-to-date``) do ``check`` para a geração já descartada.
+MOTIVO_GERACAO_DESCARTADA = "geracao-descartada"
 
 resolve_groups = make_resolve_groups(
     GROUPS, {alias: [canon] for alias, canon in GROUP_ALIASES.items()}
@@ -56,6 +61,48 @@ class BcbMicrodadosApp(FetcherApp):
         else:
             self._falhas_descoberta.pop(canon, None)
         return entries
+
+    def check_datasets(
+        self,
+        entries: list[dict[str, Any]],
+        output_dir: Path,
+        workers: int = 4,
+    ) -> CheckPlan:
+        """Verifica o frescor; com falha de descoberta num grupo pedido, sai 1.
+
+        Na coleta em modo de plano o ``check`` e o ``sync --from-plan`` são
+        processos separados, e o segundo não lista grupo: a falha de descoberta só
+        chega ao código de saída se o ``check`` falhar. Sem plano gravado, quem
+        opera cai no ``sync`` completo, que conta ``descoberta:<grupo>`` e sai 3 ou 1.
+        """
+        falhas, self._falhas_descoberta = self._falhas_descoberta, {}
+        if falhas:
+            for grupo, causas in sorted(falhas.items()):
+                logger.error(
+                    "BCB: check abortado, descoberta do grupo %s falhou: %s",
+                    grupo,
+                    "; ".join(causas),
+                )
+            raise typer.Exit(1)
+        return super().check_datasets(entries, output_dir, workers)
+
+    def check_entry(self, entry: dict[str, Any], output_dir: Path) -> CheckPlanItem:
+        """Veredito do host, com o motivo ``geracao-descartada`` quando cabe.
+
+        Se o arquivo do carimbo não existe, o sidecar dá o frescor por em dia
+        (``manifest-fresh``) e há uma versão anterior do mesmo arquivo, o download
+        daquela geração foi descartado por ser mais velho que a vigente. O motivo
+        diz isso ao plano: quem reclassifica o plano por histórico pode mantê-lo
+        como ``skip``; quem não o conhece o trata como qualquer
+        ``skip-up-to-date``.
+        """
+        item = super().check_entry(entry, output_dir)
+        if item.action != "skip-up-to-date" or item.reason != "manifest-fresh":
+            return item
+        local = Path(item.local_path)
+        if local.exists() or versao_vigente_anterior(local) is None:
+            return item
+        return replace(item, reason=MOTIVO_GERACAO_DESCARTADA)
 
     def download_datasets(
         self,
